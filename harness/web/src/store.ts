@@ -1,0 +1,490 @@
+/**
+ * Central app store: a vanilla observable shared by React components (via useSyncExternalStore)
+ * and by CopilotKit tool handlers, which need the freshest state outside the render loop.
+ */
+
+import { useSyncExternalStore } from "react";
+
+import { api } from "./api.ts";
+import type {
+  DesignDetail,
+  DesignInfo,
+  DiffResult,
+  Goal,
+  GoalEval,
+  MeasureResult,
+  PickIndex,
+  RunInfo,
+  Thread,
+  VersionInfo,
+} from "./types.ts";
+
+export type Side = "front" | "back" | "3d";
+export type ViewerMode = "select" | "comment" | "measure";
+
+/** The entity the user picked in the viewer (an anchor in the making). */
+export interface Pick {
+  kind: "footprint" | "pad" | "track" | "via" | "zone" | "point";
+  uuid: string | null;
+  ref: string | null;
+  pad: string | null;
+  net: string | null;
+  layer: string | null;
+  side: "front" | "back";
+  x: number; // click point, board mm
+  y: number;
+  entity_x: number | null;
+  entity_y: number | null;
+}
+
+export interface ViewState {
+  /** Centre in current-side SVG mm, and the visible height in mm. */
+  cx: number;
+  cy: number;
+  mm: number;
+}
+
+export interface FocusRequest {
+  center: [number, number] | null; // board mm
+  viewMM: number | null;
+  nonce: number;
+}
+
+export interface HarnessData {
+  designs: DesignInfo[];
+  designName: string | null;
+  design: DesignDetail | null;
+  rev: string; // "working" or a sha
+  side: Side;
+  index: PickIndex | null;
+  svg: string | null; // SVG text for (rev, side)
+  svgSide: "front" | "back" | null;
+  svgKey: number; // bump to force reload (cache-bust)
+  threads: Thread[];
+  versions: VersionInfo[];
+  branches: { name: string; head: string | null; current: boolean }[];
+  goal: Goal | null;
+  goalStatus: GoalEval | null;
+  /** Latest goal evaluation the agent pushed into AG-UI state (state.goal). */
+  agentGoal: GoalEval | null;
+  runs: RunInfo[];
+  diff: DiffResult | null;
+  diffVs: string | null;
+  showGrid: boolean;
+  /** Show review-comment pins on the board. */
+  showPins: boolean;
+  /** Measured viewer viewport in CSS px, so fitView works before/after layout changes. */
+  boardPx: { w: number; h: number };
+  mode: ViewerMode;
+  selection: Pick | null;
+  composerPick: Pick | null;
+  measureA: Pick | null;
+  measureB: Pick | null;
+  measure: MeasureResult | null;
+  highlight: { uuids: string[]; refs: string[]; nets: string[] } | null;
+  focus: FocusRequest | null;
+  compare: { a: string; b: string } | null; // requested by the compare_versions tool
+  showVersion: string | null; // requested by the show_version tool
+  view: ViewState | null;
+  selectedThread: number | null;
+  viewMMRequest: number | null;
+  loopEnabled: boolean;
+  supervised: boolean;
+  runActiveSince: number | null;
+  sse: "connected" | "error" | null;
+  steerDeliveredAt: number | null;
+  loading: boolean;
+  error: string | null;
+}
+
+const initial: HarnessData = {
+  designs: [],
+  designName: null,
+  design: null,
+  rev: "working",
+  side: "front",
+  index: null,
+  svg: null,
+  svgSide: null,
+  svgKey: 0,
+  threads: [],
+  versions: [],
+  branches: [],
+  goal: null,
+  goalStatus: null,
+  agentGoal: null,
+  runs: [],
+  diff: null,
+  diffVs: null,
+  showGrid: gridFromStorage(),
+  showPins: pinsFromStorage(),
+  boardPx: { w: 0, h: 0 },
+  mode: "select",
+  selection: null,
+  composerPick: null,
+  measureA: null,
+  measureB: null,
+  measure: null,
+  highlight: null,
+  focus: null,
+  compare: null,
+  showVersion: null,
+  view: null,
+  selectedThread: null,
+  viewMMRequest: null,
+  loopEnabled: false,
+  supervised: false,
+  runActiveSince: null,
+  sse: null,
+  steerDeliveredAt: null,
+  loading: false,
+  error: null,
+};
+
+type Listener = () => void;
+let data: HarnessData = initial;
+const listeners = new Set<Listener>();
+
+function emit() {
+  for (const l of listeners) l();
+}
+
+export function getStore(): HarnessData {
+  return data;
+}
+
+export function setStore(patch: Partial<HarnessData>) {
+  data = { ...data, ...patch };
+  emit();
+}
+
+export function useHarness(): HarnessData {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    () => data,
+  );
+}
+
+// --------------------------------------------------------------------------- actions
+
+function catchErr(fn: () => Promise<void>): Promise<void> {
+  return fn().catch((e) => {
+    setStore({ error: String(e instanceof Error ? e.message : e) });
+  });
+}
+
+export async function initStore(designName?: string | null) {
+  await catchErr(async () => {
+    const designs = await api.designs();
+    const name = designName ?? new URLSearchParams(window.location.search).get("design") ?? designs[0]?.name ?? null;
+    setStore({ designs });
+    if (name) await selectDesign(name);
+    else setStore({ loading: false });
+  });
+}
+
+export async function selectDesign(name: string) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("design", name);
+  window.history.replaceState(null, "", url);
+  setStore({ designName: name, rev: "working", loading: true, diff: null, diffVs: null, selection: null, measure: null, measureA: null, measureB: null, composerPick: null, selectedThread: null });
+  await refreshDesignData(true);
+}
+
+/** Loads everything that depends on the design + current rev/side. */
+export async function refreshDesignData(full = false) {
+  const { designName: name, rev, side } = getStore();
+  if (!name) return;
+  await catchErr(async () => {
+    const design = await api.design(name);
+    setStore({ design, goal: design.goal });
+    const [index, threads, versions, branches, runs] = await Promise.all([
+      api.index(name, rev),
+      api.threads(name, rev),
+      api.versions(name),
+      api.branches(name),
+      api.runs(name),
+    ]);
+    let goalStatus = getStore().goalStatus;
+    try {
+      goalStatus = await api.goalStatus(name, rev);
+    } catch {
+      // keep old
+    }
+    setStore({ index, threads, versions, branches, runs, goalStatus, loading: false });
+    if (side !== "3d") await loadSvg();
+    if (full) fitView();
+    // Keep the AG-UI agent state (head/branch/revision) in sync for the next run.
+    syncAgentDesign();
+  });
+}
+
+export async function loadSvg() {
+  const { designName: name, rev, side, svgKey, design } = getStore();
+  if (!name || (side !== "front" && side !== "back")) return;
+  await catchErr(async () => {
+    const text = await api.svg(name, rev, side, svgKey ? `${svgKey}-${design?.board_hash ?? ""}` : design?.board_hash);
+    setStore({ svg: text, svgSide: side as "front" | "back" });
+  });
+}
+
+export async function setRev(rev: string) {
+  setStore({ rev, diff: null, diffVs: null, selection: null, measure: null, measureA: null, measureB: null });
+  await refreshDesignData(true);
+  syncAgentViewing(rev);
+}
+
+export async function setSide(side: Side) {
+  setStore({ side });
+  if (side === "front" || side === "back") await loadSvg();
+}
+
+/** Reload the project list (after creating a project, or from the selector). */
+export async function refreshDesigns() {
+  await catchErr(async () => {
+    setStore({ designs: await api.designs() });
+  });
+}
+
+export async function refreshThreads() {
+  const { designName: name, rev } = getStore();
+  if (!name) return;
+  await catchErr(async () => setStore({ threads: await api.threads(name, rev) }));
+}
+
+export async function refreshVersions() {
+  const { designName: name } = getStore();
+  if (!name) return;
+  await catchErr(async () => setStore({ versions: await api.versions(name) }));
+}
+
+export async function refreshGoal() {
+  const { designName: name, rev } = getStore();
+  if (!name) return;
+  await catchErr(async () => {
+    const [goal, goalStatus] = await Promise.all([api.goal(name), api.goalStatus(name, rev)]);
+    setStore({ goal, goalStatus });
+  });
+}
+
+export async function refreshRuns() {
+  const { designName: name } = getStore();
+  if (!name) return;
+  await catchErr(async () => setStore({ runs: await api.runs(name) }));
+}
+
+export async function saveGoal(goal: Goal) {
+  const { designName: name } = getStore();
+  if (!name) throw new Error("no design");
+  const saved = await api.putGoal(name, goal);
+  setStore({ goal: saved });
+  await refreshGoal();
+  return saved;
+}
+
+// --------------------------------------------------------------------------- viewer actions
+
+export function setView(view: Partial<ViewState>) {
+  const v = getStore().view ?? { cx: 0, cy: 0, mm: 30 };
+  setStore({ view: { ...v, ...view } });
+}
+
+/** Fit the board edge outline into the viewport (the viewer supplies container size). */
+/** Remember the viewer's measured size; {@link fitView} uses it when called without args. */
+export function setBoardSize(w: number, h: number) {
+  const cur = getStore().boardPx;
+  if (cur.w !== w || cur.h !== h) setStore({ boardPx: { w, h } });
+}
+
+export function fitView(containerW = 0, containerH = 0) {
+  const idx = getStore().index;
+  if (!idx) return;
+  const [, ex, ey, ew, eh] = [0, idx.board.edge_bbox[0], idx.board.edge_bbox[1], idx.board.edge_bbox[2], idx.board.edge_bbox[3]];
+  const dims = svgDims();
+  const w = dims?.w ?? ew;
+  const h = dims?.h ?? eh;
+  // Prefer the real measured viewport: the old window fractions fitted a slightly-too-large
+  // board, which pushed the left/right Edge.Cuts out of the pane at fit zoom.
+  const measured = getStore().boardPx;
+  const cw = containerW || measured.w || window.innerWidth * 0.6;
+  const chh = containerH || measured.h || window.innerHeight * 0.8;
+  const mm = Math.max(h, (w * chh) / cw) * 1.04;
+  setStore({ view: { cx: w / 2, cy: h / 2, mm } });
+  void ey; // svg space already includes the edge offset
+  void ex;
+}
+
+export function focusOnBoard(center: [number, number] | null, viewMM: number | null) {
+  // Convert board mm to the current side's svg mm.
+  const idx = getStore().index;
+  if (!idx || !center) {
+    setStore({ focus: { center, viewMM, nonce: Date.now() } });
+    return;
+  }
+  const p = boardToSvg(center[0], center[1]);
+  setStore({ focus: { center, viewMM, nonce: Date.now() }, view: { cx: p[0], cy: p[1], mm: viewMM ?? getStore().view?.mm ?? 30 } });
+}
+
+/** board mm -> svg mm for the current side (SVG origin = top-left of edge_bbox; back mirrors x). */
+export function boardToSvg(x: number, y: number): [number, number] {
+  const idx = getStore().index;
+  const [ex, ey, ew] = idx ? idx.board.edge_bbox : [0, 0, 0];
+  if (getStore().side === "back") return [ex + ew - x, y - ey];
+  return [x - ex, y - ey];
+}
+
+export function svgToBoard(sx: number, sy: number): [number, number] {
+  const idx = getStore().index;
+  const [ex, ey, ew] = idx ? idx.board.edge_bbox : [0, 0, 0];
+  if (getStore().side === "back") return [ex + ew - sx, sy + ey];
+  return [sx + ex, sy + ey];
+}
+
+/** Intrinsic dimensions of the loaded SVG (from its viewBox), in mm. */
+export function svgDims(): { w: number; h: number } | null {
+  const { svg } = getStore();
+  if (!svg) return null;
+  const m = /viewBox="([-\d.]+)\s+([-\d.]+)\s+([\d.]+)\s+([\d.]+)"/.exec(svg);
+  if (!m) return null;
+  return { w: parseFloat(m[3]), h: parseFloat(m[4]) };
+}
+
+// --------------------------------------------------------------------------- picking
+
+export function setSelection(pick: Pick | null) {
+  setStore({ selection: pick });
+  syncAgentSelection(pick);
+}
+
+function gridFromStorage(): boolean {
+  try {
+    return localStorage.getItem("kicad-harness-grid") !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function pinsFromStorage(): boolean {
+  try {
+    return localStorage.getItem("kicad-harness-pins") !== "0";
+  } catch {
+    return true;
+  }
+}
+
+/** Show/hide review-comment pins (persisted). */
+export function togglePins(): void {
+  const next = !getStore().showPins;
+  setStore({ showPins: next });
+  try {
+    localStorage.setItem("kicad-harness-pins", next ? "1" : "0");
+  } catch {
+    // storage disabled
+  }
+}
+
+/** Show/hide the KiCad-style dot grid (persisted). */
+export function toggleGrid(): void {
+  const next = !getStore().showGrid;
+  setStore({ showGrid: next });
+  try {
+    localStorage.setItem("kicad-harness-grid", next ? "1" : "0");
+  } catch {
+    // storage disabled
+  }
+}
+
+export function setMode(mode: ViewerMode) {
+  setStore({ mode, measureB: null, measure: null, ...(mode === "measure" ? { measureA: null } : {}) });
+}
+
+export function pickedRef(p: Pick | null): string | null {
+  if (!p) return null;
+  if (p.pad && p.ref) return `${p.ref}.${p.pad}`;
+  if (p.ref) return p.ref;
+  if (p.net) return `net:${p.net}`;
+  if (p.uuid) return p.uuid;
+  return null;
+}
+
+export async function handlePick(pick: Pick | null) {
+  const { mode } = getStore();
+  setSelection(pick);
+  if (mode === "comment" && pick) {
+    setStore({ composerPick: pick });
+    return;
+  }
+  if (mode === "measure" && pick) {
+    const { measureA, designName: name, rev } = getStore();
+    if (!measureA) {
+      setStore({ measureA: pick, measure: null, measureB: null });
+    } else {
+      const a = pickedRef(measureA);
+      const b = pickedRef(pick);
+      setStore({ measureB: pick });
+      if (a && b && name) {
+        try {
+          const measure = await api.measure(name, rev, a, b);
+          setStore({ measure });
+        } catch (e) {
+          setStore({ error: String(e) });
+        }
+      }
+    }
+  }
+}
+
+// --------------------------------------------------------------------------- AG-UI state sync
+
+type AgentStatePatch = Record<string, unknown>;
+let agentStateSink: ((patch: AgentStatePatch) => void) | null = null;
+
+/** App.tsx registers this so the store can push design/selection into the AG-UI agent state. */
+export function setAgentStateSink(fn: (patch: AgentStatePatch) => void) {
+  agentStateSink = fn;
+  syncAgentDesign();
+  syncAgentSelection(getStore().selection);
+}
+
+function agentPatch(patch: AgentStatePatch) {
+  try {
+    agentStateSink?.(patch);
+  } catch {
+    // agent not ready yet; the next sync will catch up
+  }
+}
+
+export function syncAgentDesign() {
+  const { designName, design } = getStore();
+  if (!designName) return;
+  agentPatch({ design: designName, branch: design?.branch, head: design?.head });
+}
+
+export function syncAgentViewing(rev: string) {
+  agentPatch({ viewing: rev === "working" ? null : rev });
+}
+
+export function syncAgentSelection(pick: Pick | null) {
+  agentPatch({
+    selection: pick
+      ? {
+          kind: pick.kind,
+          uuid: pick.uuid,
+          ref: pick.ref,
+          pad: pick.pad,
+          net: pick.net,
+          layer: pick.layer,
+          side: pick.side,
+          x: round3(pick.x),
+          y: round3(pick.y),
+        }
+      : null,
+  });
+}
+
+function round3(v: number): number {
+  return Math.round(v * 1000) / 1000;
+}

@@ -1,0 +1,5 @@
+# Versions verified on 2026-10-16 (ag-ui-protocol 0.1.22 comes with pydantic-ai-slim[ag-ui]).
+pydantic-ai-slim[ag-ui,anthropic]==2.57.0
+fastapi==0.143.3
+uvicorn==0.54.0
+pillow==13.0.0

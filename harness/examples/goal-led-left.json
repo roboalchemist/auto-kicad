@@ -1,0 +1,12 @@
+{
+  "summary": "Move the status LED (D1) and its current-limiting resistor (R3) to the left edge of the board so the LED is visible from that side. Keep R3 right next to D1, keep every net routed, keep the board DRC-clean, and address every must-fix review comment. The board may grow a little if that helps.",
+  "criteria": [
+    {"id": "drc", "type": "drc_errors", "max": 0},
+    {"id": "routed", "type": "unconnected", "max": 0},
+    {"id": "led_left", "type": "within_region", "ref": "D1", "region": [0, 0, 6, 25]},
+    {"id": "r3_near_d1", "type": "max_distance", "a": "R3", "b": "D1", "max_mm": 3},
+    {"id": "size", "type": "board_size", "max_w": 30, "max_h": 25},
+    {"id": "review", "type": "open_threads", "severities": ["must_fix"], "max": 0}
+  ],
+  "budget": {"max_requests": 150, "max_minutes": 30}
+}

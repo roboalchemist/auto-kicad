@@ -1,0 +1,495 @@
+{
+  "footprint_dir": "libs/footprints",
+  "outline": [
+    25,
+    20
+  ],
+  "nets": {
+    "CONTROL": 1,
+    "GND": 2,
+    "DISCHARGE": 3,
+    "OUTPUT": 4,
+    "THRESHOLD": 5,
+    "VCC": 6,
+    "LED_ANODE": 7
+  },
+  "components": [
+    {
+      "ref": "U1",
+      "footprint": "SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL",
+      "value": "NE555DR",
+      "x": 9,
+      "y": 10,
+      "rotation": 0,
+      "pad_nets": {
+        "1": "GND",
+        "2": "THRESHOLD",
+        "3": "OUTPUT",
+        "4": "VCC",
+        "5": "CONTROL",
+        "6": "THRESHOLD",
+        "7": "DISCHARGE",
+        "8": "VCC"
+      }
+    },
+    {
+      "ref": "R1",
+      "footprint": "R0805",
+      "value": "10K",
+      "x": 4.5,
+      "y": 3,
+      "rotation": 0,
+      "pad_nets": {
+        "1": "VCC",
+        "2": "DISCHARGE"
+      }
+    },
+    {
+      "ref": "R2",
+      "footprint": "R0805",
+      "value": "10K",
+      "x": 13,
+      "y": 3,
+      "rotation": 180,
+      "pad_nets": {
+        "1": "DISCHARGE",
+        "2": "THRESHOLD"
+      }
+    },
+    {
+      "ref": "R3",
+      "footprint": "R0805",
+      "value": "470R",
+      "x": 17,
+      "y": 12,
+      "rotation": 0,
+      "pad_nets": {
+        "1": "OUTPUT",
+        "2": "LED_ANODE"
+      }
+    },
+    {
+      "ref": "C1",
+      "footprint": "C0805",
+      "value": "10uF",
+      "x": 9,
+      "y": 16.5,
+      "rotation": 180,
+      "pad_nets": {
+        "1": "THRESHOLD",
+        "2": "GND"
+      }
+    },
+    {
+      "ref": "C2",
+      "footprint": "C0805",
+      "value": "100nF",
+      "x": 13.5,
+      "y": 5,
+      "rotation": 0,
+      "pad_nets": {
+        "1": "CONTROL",
+        "2": "GND"
+      }
+    },
+    {
+      "ref": "C3",
+      "footprint": "C0805",
+      "value": "100nF",
+      "x": 5,
+      "y": 10,
+      "rotation": 270,
+      "pad_nets": {
+        "1": "VCC",
+        "2": "GND"
+      }
+    },
+    {
+      "ref": "D1",
+      "footprint": "LED0805-RD",
+      "value": "RED",
+      "x": 19,
+      "y": 16,
+      "rotation": 90,
+      "pad_nets": {
+        "1": "GND",
+        "2": "LED_ANODE"
+      }
+    }
+  ],
+  "tracks": [
+    {
+      "net": "VCC",
+      "points": [
+        [
+          7.095,
+          7.43
+        ],
+        [
+          6.57,
+          7.43
+        ],
+        [
+          5.0,
+          9.0
+        ]
+      ],
+      "width": 0.5,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "VCC",
+      "points": [
+        [
+          5.0,
+          9.0
+        ],
+        [
+          5.0,
+          6.0
+        ]
+      ],
+      "width": 0.5,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "VCC",
+      "points": [
+        [
+          5.0,
+          6.0
+        ],
+        [
+          5.0,
+          4.5
+        ],
+        [
+          3.5,
+          3.0
+        ]
+      ],
+      "width": 0.5,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "VCC",
+      "points": [
+        [
+          10.905,
+          12.57
+        ],
+        [
+          12.305,
+          12.57
+        ]
+      ],
+      "width": 0.5,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "VCC",
+      "points": [
+        [
+          12.305,
+          12.57
+        ],
+        [
+          11.57,
+          12.57
+        ],
+        [
+          5.0,
+          6.0
+        ]
+      ],
+      "width": 0.5,
+      "layer": "B.Cu"
+    },
+    {
+      "net": "GND",
+      "points": [
+        [
+          7.095,
+          12.57
+        ],
+        [
+          6.57,
+          12.57
+        ],
+        [
+          5.0,
+          11.0
+        ]
+      ],
+      "width": 0.5,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "GND",
+      "points": [
+        [
+          7.095,
+          12.57
+        ],
+        [
+          7.095,
+          15.595
+        ],
+        [
+          8.0,
+          16.5
+        ]
+      ],
+      "width": 0.5,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "GND",
+      "points": [
+        [
+          8.0,
+          16.5
+        ],
+        [
+          8.0,
+          17.4
+        ],
+        [
+          8.8,
+          18.2
+        ],
+        [
+          17.9,
+          18.2
+        ],
+        [
+          19.0,
+          17.1
+        ]
+      ],
+      "width": 0.5,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "GND",
+      "points": [
+        [
+          14.5,
+          5.0
+        ],
+        [
+          15.5,
+          6.0
+        ],
+        [
+          20.0,
+          6.0
+        ],
+        [
+          21.5,
+          7.5
+        ],
+        [
+          21.5,
+          15.6
+        ],
+        [
+          20.0,
+          17.1
+        ],
+        [
+          19.0,
+          17.1
+        ]
+      ],
+      "width": 0.5,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "DISCHARGE",
+      "points": [
+        [
+          8.365,
+          7.43
+        ],
+        [
+          8.365,
+          5.865
+        ],
+        [
+          5.5,
+          3.0
+        ]
+      ],
+      "width": 0.25,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "DISCHARGE",
+      "points": [
+        [
+          8.365,
+          7.43
+        ],
+        [
+          8.365,
+          4.635
+        ],
+        [
+          11.5,
+          1.5
+        ],
+        [
+          12.5,
+          1.5
+        ],
+        [
+          14.0,
+          3.0
+        ]
+      ],
+      "width": 0.25,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "THRESHOLD",
+      "points": [
+        [
+          9.635,
+          7.43
+        ],
+        [
+          9.635,
+          5.365
+        ],
+        [
+          12.0,
+          3.0
+        ]
+      ],
+      "width": 0.25,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "THRESHOLD",
+      "points": [
+        [
+          9.635,
+          7.43
+        ],
+        [
+          9.635,
+          8.9
+        ],
+        [
+          8.365,
+          10.17
+        ],
+        [
+          8.365,
+          12.57
+        ]
+      ],
+      "width": 0.25,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "THRESHOLD",
+      "points": [
+        [
+          8.365,
+          12.57
+        ],
+        [
+          8.365,
+          14.865
+        ],
+        [
+          10.0,
+          16.5
+        ]
+      ],
+      "width": 0.25,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "CONTROL",
+      "points": [
+        [
+          10.905,
+          7.43
+        ],
+        [
+          10.905,
+          6.595
+        ],
+        [
+          12.5,
+          5.0
+        ]
+      ],
+      "width": 0.25,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "OUTPUT",
+      "points": [
+        [
+          9.635,
+          12.57
+        ],
+        [
+          9.635,
+          13.9
+        ],
+        [
+          10.035,
+          14.3
+        ],
+        [
+          13.7,
+          14.3
+        ],
+        [
+          16.0,
+          12.0
+        ]
+      ],
+      "width": 0.25,
+      "layer": "F.Cu"
+    },
+    {
+      "net": "LED_ANODE",
+      "points": [
+        [
+          18.0,
+          12.0
+        ],
+        [
+          18.0,
+          13.9
+        ],
+        [
+          19.0,
+          14.9
+        ]
+      ],
+      "width": 0.25,
+      "layer": "F.Cu"
+    }
+  ],
+  "vias": [
+    {
+      "net": "VCC",
+      "x": 5.0,
+      "y": 6.0,
+      "drill": 0.3
+    },
+    {
+      "net": "VCC",
+      "x": 12.305,
+      "y": 12.57,
+      "drill": 0.3
+    }
+  ]
+}

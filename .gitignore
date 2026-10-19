@@ -1,0 +1,34 @@
+# Large binary databases (tracked via git-lfs)
+# data/*.sqlite3
+# SQLite WAL side files: readers of the WAL-mode parts DB create these
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Generated KiCad libraries from JLC2KiCad_lib
+demo/libs/
+
+# Generated output files
+demo/*.net
+demo/*.kicad_pcb
+demo/*.kicad_pro
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.DS_Store
+
+# KiCad generated files
+*.prl
+*.log
+*.erc
+*-drc.json
+*.kicad_prl
+
+# Harness build/run artefacts (the harness/ subproject has its own .gitignore)
+harness/.venv/
+harness/.vendor/
+harness/var/
+harness/web/node_modules/
+harness/web/dist/
+harness/web/.data/

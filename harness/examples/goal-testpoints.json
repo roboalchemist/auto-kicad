@@ -1,0 +1,12 @@
+{
+  "summary": "Add two probe test points near the bottom edge: TP1 on VCC and TP2 on GND (a 1.0 mm round SMD test point pad from the TestPoint library is fine). Route both, keep the board DRC-clean, and keep every pad at least 1 mm from the board edge.",
+  "criteria": [
+    {"id": "drc", "type": "drc_errors", "max": 0},
+    {"id": "routed", "type": "unconnected", "max": 0},
+    {"id": "tp1_bottom", "type": "within_region", "ref": "TP1", "region": [0, 14, 30, 25]},
+    {"id": "tp2_bottom", "type": "within_region", "ref": "TP2", "region": [0, 14, 30, 25]},
+    {"id": "edge", "type": "edge_clearance", "min_mm": 1.0},
+    {"id": "review", "type": "open_threads", "severities": ["must_fix"], "max": 0}
+  ],
+  "budget": {"max_requests": 120, "max_minutes": 25}
+}

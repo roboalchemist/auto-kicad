@@ -1,0 +1,20 @@
+data: {"type":"RUN_STARTED","timestamp":1792189877028,"threadId":"pai-fe-6e41ea","runId":"run-84d25166"}
+
+data: {"type":"TEXT_MESSAGE_START","timestamp":1792189877808,"messageId":"e85d80d5-b6c1-4642-b5ed-68fd640b831e","role":"assistant"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189877808,"messageId":"e85d80d5-b6c1-4642-b5ed-68fd640b831e","delta":"The viewer is"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189877884,"messageId":"e85d80d5-b6c1-4642-b5ed-68fd640b831e","delta":" now focused on U1 at"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189877885,"messageId":"e85d80d5-b6c1-4642-b5ed-68fd640b831e","delta":" 4x zoom. C"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189877885,"messageId":"e85d80d5-b6c1-4642-b5ed-68fd640b831e","delta":"3 and R7 are also"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189877889,"messageId":"e85d80d5-b6c1-4642-b5ed-68fd640b831e","delta":" visible in the view"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189877905,"messageId":"e85d80d5-b6c1-4642-b5ed-68fd640b831e","delta":"."}
+
+data: {"type":"TEXT_MESSAGE_END","timestamp":1792189877913,"messageId":"e85d80d5-b6c1-4642-b5ed-68fd640b831e"}
+
+data: {"type":"RUN_FINISHED","timestamp":1792189877914,"threadId":"pai-fe-6e41ea","runId":"run-84d25166","outcome":{"type":"success"}}
+

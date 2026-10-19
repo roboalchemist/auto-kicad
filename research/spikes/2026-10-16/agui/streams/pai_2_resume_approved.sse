@@ -1,0 +1,52 @@
+data: {"type":"RUN_STARTED","timestamp":1792189854580,"threadId":"pai-hitl-518f7c","runId":"run-949c839a"}
+
+data: {"type":"TOOL_CALL_RESULT","timestamp":1792189854583,"messageId":"6cca5c49-6bb7-40d6-b39f-4b8eb2213025","toolCallId":"toolu_01HvvxqVxqWU4N8Ve4WuB2uP","content":"Committed the design as v2 with message 'v1'.","role":"tool"}
+
+data: {"type":"STATE_DELTA","timestamp":1792189854583,"delta":[{"op":"replace","path":"/version","value":2},{"op":"replace","path":"/last_commit","value":"v1"}]}
+
+data: {"type":"TEXT_MESSAGE_START","timestamp":1792189855411,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","role":"assistant"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855411,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":"The top view sh"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855426,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":"ows a light be"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855563,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":"ige background with the black"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855563,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":" text \"board v1 top\""}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855563,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":" in the upper left"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855563,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":", a"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855564,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":" sol"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855564,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":"id purple square in the right"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855567,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":"-center"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855591,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":" area, and the"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855610,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":" black text \"CODE: D"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855644,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":"GE9\" in"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855660,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":" the lower left.\n\nI"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855677,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":" committed the design with the message \""}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855695,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":"v1\". The version"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855725,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":" control"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855739,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":" system"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855754,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":" lab"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855780,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":"eled it v"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792189855789,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79","delta":"2."}
+
+data: {"type":"TEXT_MESSAGE_END","timestamp":1792189855803,"messageId":"4d6e7f79-1ff9-4152-bd9c-ae3645c85c79"}
+
+data: {"type":"RUN_FINISHED","timestamp":1792189855805,"threadId":"pai-hitl-518f7c","runId":"run-949c839a","outcome":{"type":"success"}}
+

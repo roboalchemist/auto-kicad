@@ -1,0 +1,54 @@
+[submodule "research/mixelpixx-kicad-mcp-server"]
+	path = research/mixelpixx-kicad-mcp-server
+	url = https://github.com/mixelpixx/KiCAD-MCP-Server.git
+[submodule "research/finerestaurant-kicad-mcp-python"]
+	path = research/finerestaurant-kicad-mcp-python
+	url = https://github.com/Finerestaurant/kicad-mcp-python.git
+[submodule "research/lamaalrajih-kicad-mcp"]
+	path = research/lamaalrajih-kicad-mcp
+	url = https://github.com/lamaalrajih/kicad-mcp.git
+[submodule "research/seeed-kicad-mcp-server"]
+	path = research/seeed-kicad-mcp-server
+	url = https://github.com/Seeed-Studio/kicad-mcp-server.git
+[submodule "research/huaqiu-kicad-mcp"]
+	path = research/huaqiu-kicad-mcp
+	url = https://github.com/Huaqiu-Electronics/kicad-mcp.git
+[submodule "research/huaqiu-kicad-mcp-server"]
+	path = research/huaqiu-kicad-mcp-server
+	url = https://github.com/Huaqiu-Electronics/kicad-mcp-server.git
+[submodule "research/libs/kicad-footprint-generator"]
+	path = research/libs/kicad-footprint-generator
+	url = https://github.com/pointhi/kicad-footprint-generator.git
+[submodule "research/libs/JLC2KiCad_lib"]
+	path = research/libs/JLC2KiCad_lib
+	url = https://github.com/TousstNicolas/JLC2KiCad_lib.git
+[submodule "research/libs/easyeda2kicad"]
+	path = research/libs/easyeda2kicad
+	url = https://github.com/uPesy/easyeda2kicad.py.git
+[submodule "research/libs/KiPart"]
+	path = research/libs/KiPart
+	url = https://github.com/devbisme/KiPart.git
+[submodule "research/libs/skidl"]
+	path = research/libs/skidl
+	url = https://github.com/devbisme/skidl.git
+[submodule "research/libs/kicad-tools"]
+	path = research/libs/kicad-tools
+	url = https://github.com/rjwalters/kicad-tools.git
+[submodule "research/libs/kicad-symgen"]
+	path = research/libs/kicad-symgen
+	url = https://github.com/bobc/kicad-symgen.git
+[submodule "research/libs/pykicad"]
+	path = research/libs/pykicad
+	url = https://github.com/cjlano/pykicad.git
+[submodule "research/databases/jlcpcb-parts-database"]
+	path = research/databases/jlcpcb-parts-database
+	url = https://github.com/CDFER/jlcpcb-parts-database.git
+[submodule "research/databases/jlcparts"]
+	path = research/databases/jlcparts
+	url = https://github.com/yaqwsx/jlcparts.git
+[submodule "research/databases/jlcpcb-economic-parts"]
+	path = research/databases/jlcpcb-economic-parts
+	url = https://github.com/lrks/jlcpcb-economic-parts.git
+[submodule "research/databases/lcsc-scrape"]
+	path = research/databases/lcsc-scrape
+	url = https://github.com/cs2dsb/lcsc-scrape.rs.git

@@ -1,0 +1,84 @@
+/** Thin fetch wrappers over the harness REST API. Everything is relative so Vite proxies /api. */
+
+import type {
+  BranchInfo,
+  DesignDetail,
+  DesignInfo,
+  DiffResult,
+  Goal,
+  GoalEval,
+  MeasureResult,
+  ModelsResponse,
+  PickIndex,
+  RunEvent,
+  RunInfo,
+  SteerMessage,
+  Thread,
+  VersionInfo,
+  VersionSummary,
+} from "./types.ts";
+
+async function get<T>(path: string): Promise<T> {
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`GET ${path}: ${res.status} ${await res.text().catch(() => "")}`.slice(0, 300));
+  return res.json() as Promise<T>;
+}
+
+async function send<T>(path: string, method: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text().catch(() => "")}`.slice(0, 300));
+  return res.json() as Promise<T>;
+}
+
+export const api = {
+  designs: () => get<DesignInfo[]>("/api/designs"),
+  createDesign: (body: { name: string; board_text?: string; from_fixture?: boolean; goal?: Goal }) =>
+    send<{ name: string; branch: string; head: string }>("/api/designs", "POST", body),
+  models: () => get<ModelsResponse>("/api/models"),
+  stopRun: (d: string) => send<{ stopping: boolean }>(`/api/designs/${d}/stop`, "POST", {}),
+  setModel: (model: string) => send<{ current: string }>("/api/models", "PUT", { model }),
+  versionSummary: (d: string, sha: string) => get<VersionSummary>(`/api/designs/${d}/versions/${sha}/summary`),
+  design: (d: string) => get<DesignDetail>(`/api/designs/${d}`),
+  index: (d: string, rev: string) => get<PickIndex>(`/api/designs/${d}/rev/${rev}/index`),
+  svg: async (d: string, rev: string, side: "front" | "back", cacheBust?: string | null): Promise<string> => {
+    const q = cacheBust ? `?v=${cacheBust}` : "";
+    const res = await fetch(`/api/designs/${d}/rev/${rev}/svg/${side}${q}`);
+    if (!res.ok) throw new Error(`svg: ${res.status}`);
+    return res.text();
+  },
+  drc: (d: string, rev: string) => get(`/api/designs/${d}/rev/${rev}/drc`),
+  render3dUrl: (d: string, rev: string, params: string) => `/api/designs/${d}/rev/${rev}/render3d?${params}`,
+  measure: (d: string, rev: string, a: string, b: string) =>
+    get<MeasureResult>(`/api/designs/${d}/rev/${rev}/measure?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
+  diff: (d: string, a: string, b: string) =>
+    get<DiffResult>(`/api/designs/${d}/diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
+
+  versions: (d: string, branch?: string, limit = 200) =>
+    get<VersionInfo[]>(`/api/designs/${d}/versions?limit=${limit}${branch ? `&branch=${branch}` : ""}`),
+  restore: (d: string, sha: string) => send(`/api/designs/${d}/versions/${sha}/restore`, "POST", undefined),
+  branches: (d: string) => get<BranchInfo[]>(`/api/designs/${d}/branches`),
+  createBranch: (d: string, name: string, from_sha?: string) =>
+    send(`/api/designs/${d}/branches`, "POST", { name, from_sha }),
+  switchBranch: (d: string, name: string) => send(`/api/designs/${d}/branches/${name}/switch`, "POST", undefined),
+
+  threads: (d: string, rev = "working") => get<Thread[]>(`/api/designs/${d}/threads?rev=${rev}`),
+  createThread: (d: string, body: unknown) => send<Thread>(`/api/designs/${d}/threads`, "POST", body),
+  reply: (threadId: number, body: string) => send<Thread>(`/api/threads/${threadId}/replies`, "POST", { body }),
+  setStatus: (threadId: number, status: string, note?: string) =>
+    send<Thread>(`/api/threads/${threadId}/status`, "POST", { status, note }),
+
+  goal: (d: string) => get<Goal>(`/api/designs/${d}/goal`),
+  putGoal: (d: string, goal: Goal) => send<Goal>(`/api/designs/${d}/goal`, "PUT", goal),
+  goalStatus: (d: string, rev = "working") => get<GoalEval>(`/api/designs/${d}/goal/status?rev=${rev}`),
+
+  steer: (d: string, message: string, runId?: string | null) =>
+    send<SteerMessage>(`/api/designs/${d}/steer`, "POST", { message, run_id: runId }),
+  steerList: (d: string, limit = 50) => get<SteerMessage[]>(`/api/designs/${d}/steer?limit=${limit}`),
+
+  runs: (d: string) => get<RunInfo[]>(`/api/designs/${d}/runs`),
+  runEvents: (runId: string, after = 0) => get<RunEvent[]>(`/api/runs/${runId}/events?after=${after}`),
+};

@@ -1,0 +1,921 @@
+"""The harness agent: Pydantic AI tools over the KiCad engine, the design workspace and the review store.
+
+See DESIGN.md, "Agent".
+- Every editing tool commits one version.
+- Inspection tools return images the model sees.
+- When `state.loop` is on, the output validator keeps the agent working until the goal is met.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import json
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from ag_ui.core import EventType, StateSnapshotEvent
+from pydantic_ai import (
+    Agent,
+    ApprovalRequired,
+    BinaryContent,
+    CustomEvent,
+    DeferredToolRequests,
+    ModelRetry,
+    RunContext,
+    ToolReturn,
+)
+from pydantic_ai.capabilities import Caching, ProcessHistory, Thinking
+from pydantic_ai.capabilities.hooks import Hooks
+from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+from pydantic_ai.settings import ModelSettings
+
+from kicad_harness.agent import goal as goals
+from kicad_harness.agent.state import DesignState, GoalStatus, RenderInfo
+from kicad_harness.config import Config
+
+KEEP_RECENT_IMAGES = 4
+MAX_LIST = 150
+
+
+@dataclass
+class Services:
+    """Long-lived handles shared by every run (one per process)."""
+
+    config: Config
+    engine: Any  # kicad_harness.engine.client.Engine
+    artifacts: Any  # kicad_harness.engine.artifacts.Artifacts
+    store: Any  # kicad_harness.store.db.Store
+
+    @classmethod
+    def create(cls, config: Config | None = None) -> "Services":
+        from kicad_harness import config as config_mod
+        from kicad_harness.engine.artifacts import Artifacts
+        from kicad_harness.engine.client import Engine
+        from kicad_harness.store.db import Store
+
+        config = config or config_mod.get()
+        engine = Engine(config)
+        return cls(config=config, engine=engine, artifacts=Artifacts(config, engine), store=Store(config))
+
+    def workspace(self, name: str):
+        from kicad_harness.store.workspace import Workspace
+
+        return Workspace.open(self.config, name)
+
+
+@dataclass
+class HarnessDeps:
+    """Run dependencies. Implements Pydantic AI's StateHandler protocol through `state`."""
+
+    state: DesignState
+    services: Services
+    run_id: str | None = None
+    started_at: float = field(default_factory=time.time)
+    max_minutes: float | None = None
+    on_commit: Callable[[dict], None] | None = None
+
+
+# --------------------------------------------------------------------------- helpers
+
+
+def _ws(ctx: RunContext[HarnessDeps]):
+    design = ctx.deps.state.design
+    if not design:
+        raise RuntimeError("No design selected: the run's state must include `design`.")
+    return ctx.deps.services.workspace(design)
+
+
+def _snapshot(state: DesignState) -> StateSnapshotEvent:
+    return StateSnapshotEvent(type=EventType.STATE_SNAPSHOT, snapshot=state.model_dump(mode="json"))
+
+
+async def _working(ctx: RunContext[HarnessDeps]) -> tuple[str, dict]:
+    """Board hash and pick index of the working copy."""
+    svc = ctx.deps.services
+    data = _ws(ctx).board_path.read_bytes()
+    board_hash, _ = await asyncio.to_thread(svc.artifacts.materialize, data)
+    index = await asyncio.to_thread(svc.artifacts.index, board_hash)
+    return board_hash, index
+
+
+async def _sync_state(ctx: RunContext[HarnessDeps], *, bump: bool = False) -> None:
+    ws = _ws(ctx)
+    st = ctx.deps.state
+    st.branch = ws.branch()
+    st.head = ws.head()
+    board_hash, _ = await asyncio.to_thread(ctx.deps.services.artifacts.materialize, ws.board_path.read_bytes())
+    if bump or board_hash != st.board_hash:
+        st.revision += 1
+    st.board_hash = board_hash
+
+
+async def _evaluate(ctx: RunContext[HarnessDeps]) -> dict:
+    """Evaluate the stored goal on the working copy; updates state.goal."""
+    svc = ctx.deps.services
+    ws = _ws(ctx)
+    board_hash, index = await _working(ctx)
+    drc = await asyncio.to_thread(svc.artifacts.drc, board_hash)
+    threads = svc.store.review.list(ctx.deps.state.design)
+    evaluation = goals.evaluate(ws.goal(), index, drc, threads)
+    ctx.deps.state.goal = GoalStatus.model_validate(evaluation)
+    return evaluation
+
+
+def _trailers(ctx: RunContext[HarnessDeps], tool: str) -> dict[str, str]:
+    trailers = {"Harness-Tool": tool}
+    if ctx.deps.run_id:
+        trailers["Harness-Run"] = ctx.deps.run_id
+    if ctx.tool_call_id:
+        trailers["Harness-Tool-Call"] = ctx.tool_call_id
+    return trailers
+
+
+def _version_brief(version: Any) -> dict | None:
+    if not version:
+        return None
+    v = version if isinstance(version, dict) else dataclasses.asdict(version)
+    return {"sha": v.get("sha"), "short": v.get("short"), "subject": v.get("subject") or v.get("message")}
+
+
+def _engine_error_text(exc: Exception) -> str:
+    kind = getattr(exc, "type", type(exc).__name__)
+    return f"{kind}: {exc}"
+
+
+async def _edit(
+    ctx: RunContext[HarnessDeps],
+    tool: str,
+    subject: str,
+    work: Callable[[str], Any],
+    *,
+    risky: bool = False,
+) -> ToolReturn:
+    """Run a board edit under the workspace lock, commit a version, push state to the UI."""
+    st = ctx.deps.state
+    if risky and st.supervised and not ctx.tool_call_approved:
+        raise ApprovalRequired()
+    ws = _ws(ctx)
+
+    def run() -> tuple[Any, Any]:
+        with ws.lock:
+            result = work(str(ws.board_path))
+            version = ws.commit(subject, author="agent", trailers=_trailers(ctx, tool))
+            return result, version
+
+    try:
+        result, version = await asyncio.to_thread(run)
+    except Exception as exc:  # engine errors go back to the model as data, not retries
+        return ToolReturn(return_value={"ok": False, "error": _engine_error_text(exc)})
+    await _sync_state(ctx, bump=True)
+    brief = _version_brief(version)
+    if brief and ctx.deps.on_commit:
+        ctx.deps.on_commit({"tool": tool, **brief})
+    return ToolReturn(
+        return_value={"ok": True, "result": result, "version": brief or "no change"},
+        metadata=[_snapshot(st)],
+    )
+
+
+def _keep_recent_images(messages: list[ModelMessage]) -> list[ModelMessage]:
+    """Replace all but the newest few tool-returned images with a placeholder to bound context growth."""
+    seen = 0
+    out = list(messages)
+    for i in range(len(out) - 1, -1, -1):
+        msg = out[i]
+        if not isinstance(msg, ModelRequest):
+            continue
+        parts = list(msg.parts)
+        changed = False
+        for j in range(len(parts) - 1, -1, -1):
+            part = parts[j]
+            if not (isinstance(part, ToolReturnPart) and isinstance(part.content, list)):
+                continue
+            content = list(part.content)
+            for k in range(len(content) - 1, -1, -1):
+                item = content[k]
+                if isinstance(item, BinaryContent) and item.media_type.startswith("image/"):
+                    seen += 1
+                    if seen > KEEP_RECENT_IMAGES:
+                        content[k] = "[older render omitted to save context; call render_view again to look]"
+                        changed = True
+            if changed:
+                parts[j] = dataclasses.replace(part, content=content)
+        if changed:
+            out[i] = dataclasses.replace(msg, parts=parts)
+    return out
+
+
+@dataclass(kw_only=True)
+class SteeringDelivered(CustomEvent):
+    """AG-UI CUSTOM event: user messages sent mid-run have reached the agent."""
+
+    messages: list[str]
+
+
+def _steering_hooks() -> Hooks:
+    """Before each model request, hand the agent any messages the user sent while it was working."""
+    hooks = Hooks()
+
+    @hooks.on.before_model_request
+    async def deliver_steering(ctx: RunContext[HarnessDeps], request_context):
+        deps = ctx.deps
+        if deps is None or not deps.state.design or not deps.run_id:
+            return request_context
+        pending = await asyncio.to_thread(deps.services.store.steering.take, deps.state.design, deps.run_id)
+        if pending:
+            lines = "\n".join(f"- {p['message']}" for p in pending)
+            ctx.enqueue(f"Message from the user while you were working (take it into account now):\n{lines}")
+            try:
+                await ctx.emit(SteeringDelivered(messages=[p["message"] for p in pending]))
+            except Exception:  # an event sink is optional (plain agent.run has none)
+                pass
+        return request_context
+
+    return hooks
+
+
+def _center_of(entities: list[dict]) -> tuple[float, float, float]:
+    """Centre and a sensible view size (mm) for a set of resolved entities."""
+    xs: list[float] = []
+    ys: list[float] = []
+    for e in entities:
+        if "bbox" in e and e["bbox"]:
+            x, y, w, h = e["bbox"]
+            xs += [x, x + w]
+            ys += [y, y + h]
+        elif "x1" in e:
+            xs += [e["x1"], e["x2"]]
+            ys += [e["y1"], e["y2"]]
+        elif "x" in e:
+            half = max(e.get("w", 0), e.get("h", 0), e.get("size", 0)) / 2
+            xs += [e["x"] - half, e["x"] + half]
+            ys += [e["y"] - half, e["y"] + half]
+    if not xs:
+        raise ValueError("target has no geometry")
+    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+    span = max(max(xs) - min(xs), max(ys) - min(ys))
+    return cx, cy, max(6.0, span * 2.2 + 3.0)
+
+
+def _resolve(index: dict, ref: str) -> list[dict]:
+    from kicad_harness.engine.geometry import resolve
+
+    return resolve(index, ref)
+
+
+def _uuids_for(index: dict, refs: list[str]) -> list[str]:
+    uuids: list[str] = []
+    for ref in refs:
+        for entity in _resolve(index, ref):
+            if entity.get("uuid"):
+                uuids.append(entity["uuid"])
+    return uuids
+
+
+def _compact_component(fp: dict) -> dict:
+    return {
+        "ref": fp["ref"],
+        "value": fp.get("value"),
+        "footprint": fp.get("footprint"),
+        "x": round(fp["x"], 3),
+        "y": round(fp["y"], 3),
+        "rotation": round(fp.get("rotation", 0), 1),
+        "side": fp.get("side"),
+    }
+
+
+def _thread_brief(thread: dict) -> dict:
+    anchor = thread.get("anchor") or {}
+    resolved = thread.get("resolved_anchor") or {}
+    where = {k: anchor.get(k) for k in ("kind", "ref", "pad", "net", "layer") if anchor.get(k)}
+    if resolved:
+        where["at"] = [round(resolved.get("x", 0), 3), round(resolved.get("y", 0), 3)]
+        where["anchor_state"] = resolved.get("state")
+    return {
+        "number": thread["number"],
+        "status": thread["status"],
+        "severity": thread["severity"],
+        "tags": thread.get("tags", []),
+        "title": thread.get("title"),
+        "body": thread.get("body"),
+        "where": where,
+        "on_version": (thread.get("created_sha") or "")[:8],
+        "replies": [{"author": r["author"], "body": r["body"]} for r in thread.get("replies", [])[-3:]],
+    }
+
+
+INSTRUCTIONS = """\
+You are a PCB layout engineer editing a KiCad 10 board through tools. A human watches every step live in a web UI \
+(board view, your reasoning and tool calls, version history), can comment on specific parts of the board, and can roll \
+back your work.
+
+Goal handling:
+- When the user states a goal in words ("move the LED to the left edge", "keep it under 30 mm"), turn it into machine-checkable criteria yourself and save them with `set_goal`. Inspect the board first (design_summary, query, measure) so references, regions and distances are real, then call `check`. Never ask the user to pick criterion types.
+- `set_goal` takes a short `summary` (their intent, in their words where possible) and `criteria` from: drc_errors, drc_warnings, unconnected, board_size (max_w/max_h), edge_clearance (min_mm), max_distance/min_distance (a, b, max_mm/min_mm), within_region (ref, region [x1,y1,x2,y2]), open_threads (max, optional severities).
+
+Conventions:
+- Coordinates are millimetres in KiCad board space: x to the right, y DOWN. Angles are degrees, counter-clockwise.
+- Refer to parts by reference designator (U1), pads as REF.PAD (U1.3), nets as net:NAME.
+
+How to work:
+1. Orient: call design_summary, then render_view to look at the board. Use query and measure for exact numbers; \
+never guess coordinates from an image alone.
+2. Edit with the editing tools. Every successful edit is committed as a new version the user can see and roll back, \
+so prefer a few deliberate edits over many tiny ones.
+3. Verify after edits: call check (DRC plus the goal criteria). Look at the result visually with render_view, zoomed \
+on whatever you changed (pass target, view_mm and highlight). Tracks under solder mask are easier to judge in 2D than 3D.
+4. Routing: after moving parts, rip up the affected tracks (delete_tracks) and call autoroute rather than drawing \
+long routes by hand; hand-route only short or critical connections.
+5. Review feedback: list_feedback shows the user's comments, anchored to specific entities. Address must_fix and \
+warning items first. After handling one, call mark_addressed with a short note (only the user can resolve it); reply \
+with reply_to_thread if you disagree or need clarification.
+6. Never claim the goal is met unless check reports every criterion passing. If you are stuck, say exactly what \
+blocks you.
+Keep messages to the user short: what you changed and why.
+"""
+
+
+_model_override: str | None = None
+
+
+def current_model() -> str:
+    """The model new runs use: the UI's selection, else the configured HARNESS_MODEL."""
+    from kicad_harness import config as config_mod
+
+    return _model_override or config_mod.get().model
+
+
+def set_model(model: str | None) -> None:
+    """Select the model for subsequent runs. Drops the cached agent so it is rebuilt lazily."""
+    global _model_override, _agent
+    _model_override = model or None
+    _agent = None
+
+
+def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredToolRequests]:
+    """Create the harness agent. `model` defaults to `current_model()`."""
+    from kicad_harness.agent import models as model_catalog
+
+    agent: Agent[HarnessDeps, str | DeferredToolRequests] = Agent(
+        model_catalog.resolve(model or current_model()),
+        name="kicad_harness",
+        deps_type=HarnessDeps,
+        output_type=[str, DeferredToolRequests],
+        instructions=INSTRUCTIONS,
+        capabilities=[
+            Caching(),
+            Thinking(effort="medium"),
+            ProcessHistory(_keep_recent_images),
+            _steering_hooks(),
+        ],
+        retries={"tools": 5, "output": 60},
+        model_settings=ModelSettings(max_tokens=16000),
+        defer_model_check=True,
+    )
+
+    @agent.instructions
+    def session_context(ctx: RunContext[HarnessDeps]) -> str:
+        st = ctx.deps.state
+        if not st.design:
+            return "No design is selected."
+        ws = _ws(ctx)
+        lines = [
+            f"Design: {st.design} (branch {ws.branch()}, head {ws.head()[:8]}).",
+            goals.describe(ws.goal()),
+        ]
+        if st.loop:
+            lines.append(
+                "Goal loop is ON: keep inspecting, editing and checking until every criterion passes. "
+                "You will be sent back to work if you stop early."
+            )
+        if st.supervised:
+            lines.append("Supervised mode is ON: destructive tools pause for the user's approval.")
+        if st.selection:
+            lines.append(f"The user currently has this selected in the viewer: {json.dumps(st.selection)}")
+        if st.viewing and st.viewing not in ("working", st.head):
+            lines.append(f"The user is looking at older version {st.viewing[:8]}, not the working copy.")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------ inspection
+
+    @agent.tool
+    async def design_summary(ctx: RunContext[HarnessDeps]) -> ToolReturn:
+        """Board outline, components (ref, value, footprint, position, side), nets, DRC counts, goal status and open review threads."""
+        svc = ctx.deps.services
+        await _sync_state(ctx)
+        board_hash, index = await _working(ctx)
+        drc = await asyncio.to_thread(svc.artifacts.drc, board_hash)
+        evaluation = await _evaluate(ctx)
+        threads = svc.store.review.list(ctx.deps.state.design)
+        ex, ey, ew, eh = index["board"]["edge_bbox"]
+        summary = {
+            "design": ctx.deps.state.design,
+            "head": (ctx.deps.state.head or "")[:8],
+            "board_outline": {"x": round(ex, 3), "y": round(ey, 3), "width": round(ew, 3), "height": round(eh, 3)},
+            "components": [_compact_component(fp) for fp in index["footprints"]],
+            "nets": [n for n in index.get("nets", []) if n],
+            "track_segments": len(index.get("tracks", [])),
+            "vias": len(index.get("vias", [])),
+            "zones": len(index.get("zones", [])),
+            "drc": drc.get("counts", {}),
+            "goal": evaluation,
+            "open_threads": [
+                _thread_brief(t) for t in threads if t["status"] in goals.OPEN_STATUSES
+            ],
+        }
+        return ToolReturn(return_value=summary, metadata=[_snapshot(ctx.deps.state)])
+
+    @agent.tool
+    async def query(
+        ctx: RunContext[HarnessDeps],
+        kind: str,
+        ref: str | None = None,
+        net: str | None = None,
+        region: list[float] | None = None,
+    ) -> dict:
+        """List entities of one kind from the current board.
+
+        Args:
+            kind: footprint, pad, track, via or zone.
+            ref: Only items of this footprint (U1) or pad (U1.3).
+            net: Only items on this net (GND).
+            region: Only items whose position lies in [x1, y1, x2, y2] (mm).
+        """
+        plural = {"footprint": "footprints", "pad": "pads", "track": "tracks", "via": "vias", "zone": "zones"}
+        if kind not in plural:
+            raise ModelRetry(f"kind must be one of {sorted(plural)}")
+        _, index = await _working(ctx)
+        items = index.get(plural[kind], [])
+        if ref:
+            r, _, p = ref.partition(".")
+            items = [i for i in items if i.get("ref") == r and (not p or i.get("pad") == p)]
+        if net:
+            items = [i for i in items if i.get("net") == net]
+        if region:
+            x1, y1, x2, y2 = region
+            x1, x2, y1, y2 = min(x1, x2), max(x1, x2), min(y1, y2), max(y1, y2)
+
+            def inside(i: dict) -> bool:
+                if "x" in i:
+                    return x1 <= i["x"] <= x2 and y1 <= i["y"] <= y2
+                if "x1" in i:
+                    return any(x1 <= x <= x2 and y1 <= y <= y2 for x, y in ((i["x1"], i["y1"]), (i["x2"], i["y2"])))
+                return True
+
+            items = [i for i in items if inside(i)]
+        trimmed = [{k: v for k, v in i.items() if k not in ("polygon", "outline", "filled", "courtyard")} for i in items]
+        return {"count": len(trimmed), "items": trimmed[:MAX_LIST], "truncated": len(trimmed) > MAX_LIST}
+
+    @agent.tool
+    async def measure(ctx: RunContext[HarnessDeps], a: str, b: str) -> dict:
+        """Edge-to-edge copper distance between two things (0 = touching).
+
+        Args:
+            a: U1, U1.3, net:GND, a UUID, or "x,y".
+            b: Same forms as `a`.
+        """
+        from kicad_harness.engine.geometry import measure as measure_fn
+
+        _, index = await _working(ctx)
+        try:
+            return measure_fn(index, a, b)
+        except Exception as exc:
+            raise ModelRetry(f"Could not measure {a!r} to {b!r}: {exc}") from exc
+
+    @agent.tool
+    async def check(ctx: RunContext[HarnessDeps]) -> ToolReturn:
+        """Run KiCad DRC on the current board and evaluate every goal criterion."""
+        svc = ctx.deps.services
+        await _sync_state(ctx)
+        board_hash, _ = await _working(ctx)
+        drc = await asyncio.to_thread(svc.artifacts.drc, board_hash)
+        evaluation = await _evaluate(ctx)
+
+        def brief(v: dict) -> dict:
+            return {
+                "type": v.get("type"),
+                "severity": v.get("severity"),
+                "description": v.get("description"),
+                "items": [
+                    {"description": it.get("description"), "x": it.get("x"), "y": it.get("y"), "uuid": it.get("uuid")}
+                    for it in v.get("items", [])[:3]
+                ],
+            }
+
+        result = {
+            "drc_counts": drc.get("counts", {}),
+            "violations": [brief(v) for v in drc.get("violations", [])[:30]],
+            "unconnected": [brief(v) for v in drc.get("unconnected", [])[:20]],
+            "goal_met": evaluation["met"],
+            "criteria": evaluation["criteria"],
+        }
+        return ToolReturn(return_value=result, metadata=[_snapshot(ctx.deps.state)])
+
+    @agent.tool
+    async def render_view(
+        ctx: RunContext[HarnessDeps],
+        target: str | None = None,
+        x: float | None = None,
+        y: float | None = None,
+        view_mm: float | None = None,
+        mode: str = "2d",
+        side: str | None = None,
+        rotate: list[float] | None = None,
+        highlight: list[str] | None = None,
+        labels: bool = True,
+    ) -> ToolReturn:
+        """Render the board as an image you can see.
+
+        Args:
+            target: Centre the view on this (U1, U1.3, net:GND, a UUID). Overrides x/y.
+            x: View centre x in mm (with y). Omit target and x/y for the whole board.
+            y: View centre y in mm.
+            view_mm: Size of the visible area in mm (zoom). Defaults to fit the target or the board.
+            mode: "2d" (KiCad layer plot: crisp copper and silkscreen) or "3d" (raytraced, shows parts and orientation).
+            side: 2d: "front" (default) or "back". 3d: "top" (default), "bottom", or an edge view
+                ("left", "right", "front", "back").
+            rotate: 3d only: [x, y, z] degrees, e.g. [-45, 0, 45] for an isometric view (frames the whole board).
+            highlight: 2d only: things to outline in cyan (refs, REF.PAD, net:NAME, UUIDs).
+            labels: 2d only: draw reference designators (and net names on highlighted pads).
+        """
+        svc = ctx.deps.services
+        await _sync_state(ctx)
+        board_hash, index = await _working(ctx)
+        center: list[float] | None = None
+        if target:
+            try:
+                cx, cy, auto_view = _center_of(_resolve(index, target))
+            except Exception as exc:
+                raise ModelRetry(f"Unknown render target {target!r}: {exc}") from exc
+            center = [cx, cy]
+            view_mm = view_mm or auto_view
+        elif x is not None and y is not None:
+            center = [x, y]
+        if mode == "2d":
+            side_2d = {"top": "front", "bottom": "back"}.get(side or "front", side or "front")
+            if side_2d not in ("front", "back"):
+                raise ModelRetry('In 2d, side must be "front" or "back"')
+            try:
+                highlight_uuids = _uuids_for(index, highlight or [])
+            except Exception as exc:
+                raise ModelRetry(f"Unknown highlight item: {exc}") from exc
+            spec: dict[str, Any] = {"mode": "2d", "side": side_2d, "center": center, "view_mm": view_mm,
+                                    "highlight": highlight_uuids, "labels": labels}
+        elif mode == "3d":
+            spec = {"mode": "3d", "side": side or "top", "center": center, "view_mm": view_mm,
+                    "rotate": rotate, "quality": "basic"}
+        else:
+            raise ModelRetry('mode must be "2d" or "3d"')
+        try:
+            png_path, url = await asyncio.to_thread(svc.artifacts.render, board_hash, spec)
+        except Exception as exc:
+            return ToolReturn(return_value={"ok": False, "error": _engine_error_text(exc)})
+        what = target or (f"({x}, {y})" if center else "whole board")
+        caption = f"{mode.upper()} {spec['side']} view of {what}" + (f", {view_mm:.1f} mm tall" if view_mm else "")
+        ctx.deps.state.last_render = RenderInfo(url=url, caption=caption, view=spec)
+        png = Path(png_path).read_bytes()
+        meta = json.dumps({"url": url, "caption": caption, "view": spec})
+        return ToolReturn(
+            return_value=[meta, BinaryContent(data=png, media_type="image/png")],
+            metadata=[_snapshot(ctx.deps.state)],
+        )
+
+    # ------------------------------------------------------------------ review
+
+    @agent.tool
+    async def list_feedback(ctx: RunContext[HarnessDeps], status: str = "open") -> dict:
+        """The user's review threads, anchored to entities on the board and located on the current version.
+
+        Args:
+            status: open (open + reopened), addressed, resolved, wontfix, or all.
+        """
+        svc = ctx.deps.services
+        _, index = await _working(ctx)
+        threads = svc.store.review.list(ctx.deps.state.design)
+        if status == "open":
+            threads = [t for t in threads if t["status"] in goals.OPEN_STATUSES]
+        elif status != "all":
+            threads = [t for t in threads if t["status"] == status]
+        for t in threads:
+            t["resolved_anchor"] = svc.store.review.resolve_anchor(t, index)
+        order = {"must_fix": 0, "warning": 1, "suggestion": 2, "info": 3}
+        threads.sort(key=lambda t: (order.get(t["severity"], 9), t["number"]))
+        return {"count": len(threads), "threads": [_thread_brief(t) for t in threads]}
+
+    @agent.tool
+    async def reply_to_thread(ctx: RunContext[HarnessDeps], number: int, message: str) -> dict:
+        """Reply to review thread #number (to explain a decision or ask the user a question)."""
+        svc = ctx.deps.services
+        thread = svc.store.review.by_number(ctx.deps.state.design, number)
+        if not thread:
+            raise ModelRetry(f"No thread #{number}")
+        svc.store.review.reply(thread["id"], message, author="agent", sha=_ws(ctx).head())
+        return {"ok": True, "thread": number}
+
+    @agent.tool
+    async def mark_addressed(ctx: RunContext[HarnessDeps], number: int, note: str) -> dict:
+        """Mark review thread #number as addressed by the current version, with a short note on what changed."""
+        svc = ctx.deps.services
+        thread = svc.store.review.by_number(ctx.deps.state.design, number)
+        if not thread:
+            raise ModelRetry(f"No thread #{number}")
+        head = _ws(ctx).head()
+        svc.store.review.set_status(thread["id"], "addressed", by="agent", sha=head, note=note)
+        return {"ok": True, "thread": number, "addressed_in": head[:8]}
+
+    # ------------------------------------------------------------------ editing
+
+    engine = lambda ctx: ctx.deps.services.engine  # noqa: E731
+
+    @agent.tool(sequential=True)
+    async def move_footprint(
+        ctx: RunContext[HarnessDeps], ref: str, x: float, y: float, rotation: float | None = None
+    ) -> ToolReturn:
+        """Move a footprint to an absolute position (its anchor point), optionally setting its rotation (degrees)."""
+        subject = f"Move {ref} to ({x:g}, {y:g})" + (f" at {rotation:g} deg" if rotation is not None else "")
+        return await _edit(
+            ctx, "move_footprint", subject,
+            lambda b: engine(ctx).call("move_footprint", board=b, ref=ref, x=x, y=y, rotation=rotation),
+        )
+
+    @agent.tool(sequential=True)
+    async def rotate_footprint(ctx: RunContext[HarnessDeps], ref: str, angle: float) -> ToolReturn:
+        """Rotate a footprint by `angle` degrees (relative, counter-clockwise) about its anchor."""
+        return await _edit(
+            ctx, "rotate_footprint", f"Rotate {ref} by {angle:g} deg",
+            lambda b: engine(ctx).call("rotate_footprint", board=b, ref=ref, angle=angle),
+        )
+
+    @agent.tool(sequential=True)
+    async def flip_footprint(ctx: RunContext[HarnessDeps], ref: str) -> ToolReturn:
+        """Move a footprint to the other side of the board (front <-> back), in place."""
+        return await _edit(
+            ctx, "flip_footprint", f"Flip {ref} to the other side",
+            lambda b: engine(ctx).call("flip_footprint", board=b, ref=ref),
+        )
+
+    @agent.tool(sequential=True)
+    async def move_reference_text(ctx: RunContext[HarnessDeps], ref: str, x: float, y: float) -> ToolReturn:
+        """Move a footprint's silkscreen reference designator to an absolute position (mm)."""
+        return await _edit(
+            ctx, "move_reference_text", f"Move {ref} silkscreen label to ({x:g}, {y:g})",
+            lambda b: engine(ctx).call("move_reference_text", board=b, ref=ref, x=x, y=y),
+        )
+
+    @agent.tool(sequential=True)
+    async def delete_tracks(ctx: RunContext[HarnessDeps], nets: list[str] | None = None) -> ToolReturn:
+        """Rip up tracks and vias: only on `nets` if given, otherwise ALL routing on the board."""
+        what = ", ".join(nets) if nets else "all nets"
+        return await _edit(
+            ctx, "delete_tracks", f"Rip up tracks on {what}",
+            lambda b: engine(ctx).call("delete_tracks", board=b, nets=nets),
+            risky=True,
+        )
+
+    @agent.tool(sequential=True)
+    async def delete_items(ctx: RunContext[HarnessDeps], uuids: list[str]) -> ToolReturn:
+        """Delete specific board items (tracks, vias, zones, shapes) by UUID."""
+        return await _edit(
+            ctx, "delete_items", f"Delete {len(uuids)} item(s)",
+            lambda b: engine(ctx).call("delete_items", board=b, uuids=uuids),
+        )
+
+    @agent.tool(sequential=True)
+    async def add_track(
+        ctx: RunContext[HarnessDeps], net: str, points: list[list[float]], width: float = 0.25, layer: str = "F.Cu"
+    ) -> ToolReturn:
+        """Draw a track through `points` [[x, y], ...] on `layer` (F.Cu or B.Cu). Prefer 45-degree bends."""
+        return await _edit(
+            ctx, "add_track", f"Route {net} on {layer} ({len(points) - 1} segment(s))",
+            lambda b: engine(ctx).call("add_track", board=b, net=net, points=points, width=width, layer=layer),
+        )
+
+    @agent.tool(sequential=True)
+    async def add_via(
+        ctx: RunContext[HarnessDeps], x: float, y: float, net: str, size: float = 0.6, drill: float = 0.3
+    ) -> ToolReturn:
+        """Add a through via at (x, y) on `net`."""
+        return await _edit(
+            ctx, "add_via", f"Add {net} via at ({x:g}, {y:g})",
+            lambda b: engine(ctx).call("add_via", board=b, x=x, y=y, net=net, size=size, drill=drill),
+        )
+
+    @agent.tool(sequential=True)
+    async def autoroute(ctx: RunContext[HarnessDeps], timeout_s: int = 120) -> ToolReturn:
+        """Route every unrouted connection with Freerouting. Existing tracks are kept; rip up first to re-route."""
+        from kicad_harness.engine.freerouting import autoroute as run_freerouting
+
+        svc = ctx.deps.services
+        return await _edit(
+            ctx, "autoroute", "Autoroute with Freerouting",
+            lambda b: run_freerouting(svc.engine, b, svc.config, timeout_s=timeout_s),
+            risky=True,
+        )
+
+    @agent.tool(sequential=True)
+    async def set_board_outline(
+        ctx: RunContext[HarnessDeps], width: float, height: float, x: float = 0.0, y: float = 0.0,
+        corner_radius: float = 0.0,
+    ) -> ToolReturn:
+        """Replace the board outline with a width x height rectangle at (x, y), optionally with rounded corners."""
+        return await _edit(
+            ctx, "set_board_outline", f"Set board outline to {width:g} x {height:g} mm",
+            lambda b: engine(ctx).call(
+                "set_outline", board=b, width=width, height=height, x=x, y=y, corner_radius=corner_radius
+            ),
+            risky=True,
+        )
+
+    @agent.tool(sequential=True)
+    async def add_copper_zone(
+        ctx: RunContext[HarnessDeps], net: str, layer: str, margin: float = 0.5,
+        polygon: list[list[float]] | None = None,
+    ) -> ToolReturn:
+        """Add a filled copper pour on `net`/`layer`, covering the board outline inset by `margin` unless `polygon` is given."""
+        return await _edit(
+            ctx, "add_copper_zone", f"Add {net} copper zone on {layer}",
+            lambda b: engine(ctx).call("add_zone", board=b, net=net, layer=layer, margin=margin, polygon=polygon),
+        )
+
+    @agent.tool(sequential=True)
+    async def refill_zones(ctx: RunContext[HarnessDeps]) -> ToolReturn:
+        """Refill every copper zone (do this after moving parts or tracks under a pour)."""
+        return await _edit(
+            ctx, "refill_zones", "Refill copper zones",
+            lambda b: engine(ctx).call("refill_zones", board=b),
+        )
+
+    @agent.tool
+    async def find_footprints(ctx: RunContext[HarnessDeps], query: str, limit: int = 30) -> dict:
+        """Search the footprint libraries by name, e.g. "TestPoint_Pad_1.0", "MountingHole_3.2mm", "PinHeader_1x02"."""
+        words = [w.lower() for w in query.split()]
+        found: list[str] = []
+        for root in ctx.deps.services.config.footprint_dirs:
+            root = Path(root)
+            if not root.exists():
+                continue
+            for path in sorted(root.rglob("*.kicad_mod")):
+                lib = path.parent.name.removesuffix(".pretty") if path.parent.suffix == ".pretty" else ""
+                name = f"{lib}:{path.stem}" if lib else path.stem
+                if all(w in name.lower() for w in words):
+                    found.append(name)
+                    if len(found) >= limit:
+                        return {"matches": found, "truncated": True}
+        return {"matches": found, "truncated": False}
+
+    @agent.tool(sequential=True)
+    async def add_footprint(
+        ctx: RunContext[HarnessDeps], footprint: str, ref: str, value: str, x: float, y: float,
+        rotation: float = 0.0, side: str = "front", pad_nets: dict[str, str] | None = None,
+    ) -> ToolReturn:
+        """Place a library footprint (from find_footprints) as a new part and optionally connect its pads to nets."""
+        svc = ctx.deps.services
+
+        def work(board: str) -> dict:
+            placed = svc.engine.call(
+                "add_footprint", board=board, footprint=footprint, ref=ref, value=value, x=x, y=y,
+                rotation=rotation, side=side, footprint_dirs=[str(p) for p in svc.config.footprint_dirs],
+            )
+            for pad, net in (pad_nets or {}).items():
+                svc.engine.call("set_pad_net", board=board, ref=ref, pad=str(pad), net=net)
+            return placed
+
+        return await _edit(ctx, "add_footprint", f"Add {ref} ({footprint}) at ({x:g}, {y:g})", work)
+
+    @agent.tool(sequential=True)
+    async def remove_footprint(ctx: RunContext[HarnessDeps], ref: str) -> ToolReturn:
+        """Delete a footprint from the board."""
+        return await _edit(
+            ctx, "remove_footprint", f"Remove {ref}",
+            lambda b: engine(ctx).call("remove_footprint", board=b, ref=ref),
+            risky=True,
+        )
+
+    @agent.tool(sequential=True)
+    async def set_pad_net(ctx: RunContext[HarnessDeps], ref: str, pad: str, net: str) -> ToolReturn:
+        """Connect a pad to a net (the net is created if new). Changes connectivity, so route afterwards."""
+        return await _edit(
+            ctx, "set_pad_net", f"Connect {ref}.{pad} to {net}",
+            lambda b: engine(ctx).call("set_pad_net", board=b, ref=ref, pad=str(pad), net=net),
+        )
+
+    # ------------------------------------------------------------------ history
+
+    @agent.tool
+    async def list_versions(ctx: RunContext[HarnessDeps], limit: int = 20) -> dict:
+        """Recent versions on the current branch, newest first."""
+        ws = _ws(ctx)
+        versions = ws.log(limit=limit)
+        return {
+            "branch": ws.branch(),
+            "versions": [
+                {"sha": v["sha"][:8] if isinstance(v, dict) else v.sha[:8],
+                 "subject": (v["subject"] if isinstance(v, dict) else v.subject),
+                 "author": (v["author"] if isinstance(v, dict) else v.author)}
+                for v in versions
+            ],
+        }
+
+    @agent.tool(sequential=True)
+    async def restore_version(ctx: RunContext[HarnessDeps], sha: str) -> ToolReturn:
+        """Restore the board to an earlier version, as a new version on the current branch."""
+        st = ctx.deps.state
+        if st.supervised and not ctx.tool_call_approved:
+            raise ApprovalRequired()
+        ws = _ws(ctx)
+        try:
+            version = await asyncio.to_thread(
+                lambda: ws.restore(sha, author="agent", trailers=_trailers(ctx, "restore_version"))
+            )
+        except Exception as exc:
+            return ToolReturn(return_value={"ok": False, "error": _engine_error_text(exc)})
+        await _sync_state(ctx, bump=True)
+        brief = _version_brief(version)
+        if brief and ctx.deps.on_commit:
+            ctx.deps.on_commit({"tool": "restore_version", **brief})
+        return ToolReturn(return_value={"ok": True, "version": brief}, metadata=[_snapshot(st)])
+
+    # ------------------------------------------------------------------ goal
+
+    @agent.tool(sequential=True)
+    async def set_goal(ctx: RunContext[HarnessDeps], summary: str, criteria: list[dict]) -> ToolReturn:
+        """Set this design's goal: a short summary of what the user wants, plus the machine-checkable
+        criteria that capture it (drc_errors, drc_warnings, unconnected, board_size, edge_clearance,
+        max_distance, min_distance, within_region, open_threads).  Derive the criteria from the
+        user's stated goal by inspecting the board, then call `check` to evaluate them."""
+        from kicad_harness.agent import goal as goals
+
+        st = ctx.deps.state
+        ws = _ws(ctx)
+        spec = {"summary": summary.strip(), "criteria": criteria}
+        budget = ws.goal().get("budget")
+        if budget:
+            spec["budget"] = budget
+        try:
+            goals.validate_goal(spec)
+        except ValueError as exc:
+            raise ModelRetry(f"the goal is invalid: {exc}") from exc
+        with ws.lock:
+            version = ws.set_goal(spec, author="agent")
+        await _sync_state(ctx, bump=False)
+        if version is not None and ctx.deps.on_commit:
+            ctx.deps.on_commit({"tool": "set_goal", **_version_brief(version)})
+        evaluation = None
+        try:
+            svc = ctx.deps.services
+            board_hash, _ = svc.artifacts.materialize(ws.board_path.read_bytes())
+            index = svc.artifacts.index(board_hash)
+            drc = svc.artifacts.drc(board_hash)
+            evaluation = goals.evaluate(spec, index, drc, svc.store.review.list(st.design))
+            st.goal_met = bool(evaluation.get("met"))
+            st.goal = evaluation
+        except Exception:
+            pass
+        return ToolReturn(
+            return_value={"ok": True, "goal": spec, "evaluation": evaluation,
+                          "version": _version_brief(version) if version else None},
+            metadata=[_snapshot(st)],
+        )
+
+    # ------------------------------------------------------------------ goal loop
+
+    @agent.output_validator
+    async def enforce_goal(
+        ctx: RunContext[HarnessDeps], output: str | DeferredToolRequests
+    ) -> str | DeferredToolRequests:
+        if isinstance(output, DeferredToolRequests) or not ctx.deps.state.loop or not ctx.deps.state.design:
+            return output
+        evaluation = await _evaluate(ctx)
+        if evaluation["met"]:
+            return output
+        if ctx.deps.max_minutes and time.time() - ctx.deps.started_at > ctx.deps.max_minutes * 60:
+            return f"{output}\n\n(Stopped: time budget reached with the goal unmet: {goals.failing_summary(evaluation)})"
+        raise ModelRetry(
+            "The goal is not met yet: "
+            + goals.failing_summary(evaluation)
+            + ". Keep working (inspect, edit, check) and only finish when check reports every criterion passing."
+        )
+
+    return agent
+
+
+_agent: Agent[HarnessDeps, str | DeferredToolRequests] | None = None
+
+
+def get_agent() -> Agent[HarnessDeps, str | DeferredToolRequests]:
+    global _agent
+    if _agent is None:
+        _agent = build_agent()
+    return _agent
+
+
+def usage_limits_for(goal: dict):
+    """UsageLimits from a goal's budget."""
+    from pydantic_ai.usage import UsageLimits
+
+    budget = goal.get("budget") or {}
+    return UsageLimits(request_limit=int(budget.get("max_requests", 120)))

@@ -1,0 +1,54 @@
+data: {"type":"RUN_STARTED","timestamp":1792190064625,"threadId":"pai-hitl-noreasoning","runId":"run-507bbbff"}
+
+data: {"type":"TOOL_CALL_RESULT","timestamp":1792190064627,"messageId":"eda6f969-776b-4f7e-98aa-2c04dfc09d19","toolCallId":"toolu_01HvvxqVxqWU4N8Ve4WuB2uP","content":"Committed the design as v2 with message 'v1'.","role":"tool"}
+
+data: {"type":"STATE_DELTA","timestamp":1792190064627,"delta":[{"op":"replace","path":"/version","value":2},{"op":"replace","path":"/last_commit","value":"v1"}]}
+
+data: {"type":"TEXT_MESSAGE_START","timestamp":1792190065563,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","role":"assistant"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065563,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":"The top view sh"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065688,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":"ows a light be"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065693,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":"ige background with"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065693,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":" the black"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065693,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":" text \"board v1 top\""}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065694,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":" in"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065694,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":" the upper left,"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065694,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":" a sol"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065725,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":"id purple square"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065735,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":" in the right"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065757,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":"-center"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065772,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":" area"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065805,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":", and the text \"CODE"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065822,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":": DGE9\" in the"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065841,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":" lower left.\n\nI"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065866,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":" committed the design with message \"v"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065885,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":"1\". The commit t"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065901,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":"ool re"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065920,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":"ported it as v"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065942,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":"2, so the version number differ"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":1792190065965,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d","delta":"s from the message."}
+
+data: {"type":"TEXT_MESSAGE_END","timestamp":1792190065972,"messageId":"1db2e94a-261a-42d9-b627-b6a9af78363d"}
+
+data: {"type":"RUN_FINISHED","timestamp":1792190065973,"threadId":"pai-hitl-noreasoning","runId":"run-507bbbff","outcome":{"type":"success"}}
+

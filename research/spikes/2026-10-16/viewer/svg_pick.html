@@ -1,0 +1,76 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SVG + overlay picking spike</title>
+  <style>
+    body { margin: 0; background: #101418; color: #ddd; font: 13px sans-serif; }
+    #wrap svg { width: 1000px; height: 800px; display: block; }
+    .hit .trk { fill: none; stroke: transparent; pointer-events: stroke; }
+    /* pointer-events: fill, not all: "all" also hit-tests the (invisible) default 1-unit = 1 mm stroke */
+    .hit .pad, .hit .via, .hit .fp { fill: transparent; stroke: none; pointer-events: fill; }
+    .hit .selected { fill: rgba(0, 229, 255, 0.25); stroke: #00e5ff; stroke-width: 0.05; }
+    .hit .trk.selected { fill: none; stroke: rgba(0, 229, 255, 0.6); }
+  </style>
+</head>
+<body>
+  <div id="wrap"></div>
+  <pre id="out"></pre>
+  <script type="module">
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const [svgText, items] = await Promise.all([
+      fetch("svg/front.svg").then(r => r.text()),
+      fetch("items_uniq.json").then(r => r.json()),
+    ]);
+    const svg = document.importNode(new DOMParser().parseFromString(svgText, "image/svg+xml").documentElement, true);
+    svg.setAttribute("width", "1000");
+    svg.setAttribute("height", "800");
+    document.getElementById("wrap").appendChild(svg);
+
+    // page-size-mode 2: SVG user units are mm, origin = top-left of the Edge.Cuts outline
+    const ox = items.edge_bbox_mm[0] + 0.025, oy = items.edge_bbox_mm[1] + 0.025;
+    const g = document.createElementNS(SVG_NS, "g");
+    g.setAttribute("class", "hit");
+    g.setAttribute("transform", `translate(${-ox} ${-oy})`);
+    const add = (tag, attrs, data) => {
+      const el = document.createElementNS(SVG_NS, tag);
+      for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+      for (const [k, v] of Object.entries(data)) el.dataset[k] = v;
+      g.appendChild(el);
+    };
+    for (const f of items.footprints) {
+      const [x, y, w, h] = f.bbox;
+      add("rect", {class: "fp", x, y, width: w, height: h}, {kind: "footprint", ref: f.ref, uuid: f.uuid});
+    }
+    for (const t of items.tracks) {
+      add("line", {class: "trk", x1: t.x1, y1: t.y1, x2: t.x2, y2: t.y2, "stroke-width": t.w, "stroke-linecap": "round"},
+          {kind: "track", net: t.net, layer: t.layer, uuid: t.uuid});
+    }
+    for (const p of items.pads) {
+      const rx = p.shape === "Oval" ? Math.min(p.w, p.h) / 2 : 0;
+      add("rect", {class: "pad", x: p.x - p.w / 2, y: p.y - p.h / 2, width: p.w, height: p.h, rx,
+                   transform: `rotate(${-p.rot} ${p.x} ${p.y})`},
+          {kind: "pad", ref: p.ref, pad: p.num, net: p.net, uuid: p.uuid});
+    }
+    for (const v of items.vias) add("circle", {class: "via", cx: v.x, cy: v.y, r: 0.3}, {kind: "via", net: v.net, uuid: v.uuid});
+    svg.appendChild(g);
+
+    window.__picks = [];
+    window.boardToClient = (x, y) => {
+      const pt = svg.createSVGPoint(); pt.x = x - ox; pt.y = y - oy;
+      const s = pt.matrixTransform(svg.getScreenCTM()); return [s.x, s.y];
+    };
+    svg.addEventListener("click", e => {
+      const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+      const m = pt.matrixTransform(svg.getScreenCTM().inverse());
+      const hits = document.elementsFromPoint(e.clientX, e.clientY).filter(el => el.dataset && el.dataset.uuid);
+      g.querySelectorAll(".selected").forEach(el => el.classList.remove("selected"));
+      if (hits[0]) hits[0].classList.add("selected");
+      const pick = {board_mm: [+(m.x + ox).toFixed(3), +(m.y + oy).toFixed(3)], hits: hits.map(h => ({...h.dataset}))};
+      window.__picks.push(pick);
+      document.getElementById("out").textContent = JSON.stringify(pick, null, 1);
+    });
+    window.__ready = true;
+  </script>
+</body>
+</html>
