@@ -16,7 +16,7 @@
     "@copilotkit/runtime": "1.79.1",
     "@copilotkit/sqlite-runner": "1.79.1",
     "@types/three": "^0.186.0",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.3",
     "express": "^5.3.0",
     "http-proxy-middleware": "^4.2.0",
     "react": "^19.3.1",
