@@ -240,7 +240,7 @@ The `random_symbol.py` module generates random symbols for fuzz-like round-trip 
 - **Limited error context**: Errors during symbol generation are caught and printed, but the user gets minimal diagnostic info
 - **simp_sexp dependency**: A custom/niche library for S-expression handling; coupling to its API makes the code harder to understand without that library's docs
 
-## Key Takeaways for auto-kicad
+## Key Takeaways for kicad-agent
 
 1. **CSV-to-symbol pipeline** is a well-validated pattern -- the input format is simple, human-editable, and spreadsheet-compatible
 2. **Pin placement algorithm** handles all four sides with proper grid alignment, centering, and directional options

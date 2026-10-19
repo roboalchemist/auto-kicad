@@ -250,7 +250,7 @@ Each directory typically contains: `.txt` (source), `.lib`/`.dcm` (v5 output), a
 - The `Component` class from `schlib.py` is used as an intermediate representation for both input parsing and output, creating unnecessary coupling between the KiCad library format and the internal model
 - The generator classes (`GenerateKicad`, `GenerateSweetLib`) inherit from each other but share layout logic that belongs in the parser
 
-## Key Insights for auto-kicad
+## Key Insights for kicad-agent
 
 1. **Text format is the key innovation**: The symgen text format is a well-designed DSL for describing IC symbols compactly. A pin that takes 5+ lines in KiCad's native format is 1 line in symgen. This is worth studying as a reference for any text-based symbol input format.
 

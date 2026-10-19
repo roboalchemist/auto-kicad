@@ -43,8 +43,8 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/roboalchemist/auto-kicad.git",
+    "url": "https://github.com/roboalchemist/kicad-agent.git",
     "directory": "harness/web"
   },
-  "homepage": "https://github.com/roboalchemist/auto-kicad"
+  "homepage": "https://github.com/roboalchemist/kicad-agent"
 }

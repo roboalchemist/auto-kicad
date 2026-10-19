@@ -222,7 +222,7 @@ Entry point: `easyeda2kicad` (argparse-based)
 - **EasyEDA shape designator parsing**: Tilde-delimited field extraction pattern
 - **Layer ID mapping tables**: EasyEDA layer numbers to KiCad layer names
 
-## Relevance to auto-kicad
+## Relevance to kicad-agent
 
 This library provides a complete reference for:
 1. **EasyEDA/LCSC data access** -- API endpoints, response structure, and 3D model CDN

@@ -329,7 +329,7 @@ The kicad-jlcpcb-tools plugin maintains a corrections database for common packag
 - `PCBWAY_PCBA_GUIDE.md` — PCBWay equivalent (more flexible sourcing, better for THT/mixed)
 - `demo/drc_rules.py` — 27-check DRC engine against JLCPCB manufacturing rules
 - `data/jlcpcb-components.sqlite3` — 437k JLCPCB parts local DB (query with Python/sqlite3)
-- `README.md` — auto-kicad project overview
+- `README.md` — kicad-agent project overview
 
 ---
 

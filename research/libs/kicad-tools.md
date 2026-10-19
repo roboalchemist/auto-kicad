@@ -299,9 +299,9 @@ Optional GPU acceleration:
 6. **No PyPI download metrics visible**: Unclear adoption level
 7. **Single maintainer**: Bus factor of 1
 
-## Relevance to auto-kicad
+## Relevance to kicad-agent
 
-**High relevance**. kicad-tools is the closest existing project to what auto-kicad aims to build. Key areas of interest:
+**High relevance**. kicad-tools is the closest existing project to what kicad-agent aims to build. Key areas of interest:
 
 - **S-expression parser**: The round-trip-preserving parser is directly reusable
 - **MCP server pattern**: The tool registry, session management, and preference learning patterns are worth studying

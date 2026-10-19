@@ -251,7 +251,7 @@ The `schematics/` subpackage provides experimental auto-placement and routing:
 - **Medium**: Complex operator overloading (`&`, `|`, `+=`) may confuse LLMs unfamiliar with SKiDL
 - **Low risk**: The global default_circuit pattern means most simple scripts "just work" without explicit Circuit management
 
-## Key Insights for auto-kicad
+## Key Insights for kicad-agent
 
 1. **SKiDL's API is the gold standard for programmatic circuit description** — its Part/Net/Bus model with operator overloading is clean and Pythonic
 2. **The series/parallel operators (`&` and `|`) are uniquely powerful** for expressing circuit topology concisely

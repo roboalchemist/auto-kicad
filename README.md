@@ -1,8 +1,8 @@
-# auto-kicad
+# kicad-agent
 
 **An agent that designs PCBs in KiCad while you watch, comment, and roll back.**
 
-auto-kicad is a research harness for AI-driven board design. A Pydantic AI agent edits a
+kicad-agent is a research harness for AI-driven board design. A Pydantic AI agent edits a
 real KiCad 10 board through a set of CAD tools — placement, routing, outline, zones,
 silkscreen — while a web UI streams the board, the agent's reasoning, and every version
 it commits. You can click any pad, track or via to leave a review comment, and the agent
@@ -83,8 +83,8 @@ Prerequisites: macOS, [KiCad 10](https://www.kicad.org/) at
 and Homebrew `cairo`.
 
 ```bash
-git clone --recurse-submodules https://github.com/roboalchemist/auto-kicad.git
-cd auto-kicad/harness
+git clone --recurse-submodules https://github.com/roboalchemist/kicad-agent.git
+cd kicad-agent/harness
 
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e '.[dev,openai,google]'

@@ -26,9 +26,9 @@ openai = ["openai>=1.40"]
 google = ["google-genai>=1.0"]
 
 [project.urls]
-Homepage = "https://github.com/roboalchemist/auto-kicad"
-Repository = "https://github.com/roboalchemist/auto-kicad"
-Issues = "https://github.com/roboalchemist/auto-kicad/issues"
+Homepage = "https://github.com/roboalchemist/kicad-agent"
+Repository = "https://github.com/roboalchemist/kicad-agent"
+Issues = "https://github.com/roboalchemist/kicad-agent/issues"
 
 [project.scripts]
 kicad-harness = "kicad_harness.cli:app"

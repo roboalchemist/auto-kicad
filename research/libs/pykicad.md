@@ -107,12 +107,12 @@ Only the legacy module library format is supported, and only for writing.
 7. **Abandoned**: Last meaningful development appears very old, no recent updates
 8. **Not pip-installable**: No packaging metadata
 
-## Relevance to auto-kicad
+## Relevance to kicad-agent
 
 **Very low.** This library:
 - Does not handle any modern KiCad file format
-- Has no S-expression parser (the core need for auto-kicad)
+- Has no S-expression parser (the core need for kicad-agent)
 - Is write-only with no round-trip capability
 - Covers only legacy footprint library generation for silkscreen art
 
-The only takeaway is a reference for the legacy `.mod` format structure, which is not a priority for auto-kicad. No code or patterns from this library are reusable for our purposes.
+The only takeaway is a reference for the legacy `.mod` format structure, which is not a priority for kicad-agent. No code or patterns from this library are reusable for our purposes.

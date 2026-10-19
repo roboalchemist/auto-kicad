@@ -187,7 +187,7 @@ JLC2KiCadLib <part#> [<part#> ...]
 - **SVG arc parameterization**: Both footprint and symbol handlers implement the W3C SVG arc center parameterization algorithm (F.6.5). The code is duplicated between `footprint_handlers.py` and `symbol_handlers.py`.
 - **WRL generation**: Custom OBJ-to-VRML converter. Handles materials (ambient, diffuse, specular, transparency) and indexed face sets.
 
-## Key Takeaways for auto-kicad
+## Key Takeaways for kicad-agent
 
 1. **EasyEDA API is the data source**: The `easyeda.com/api/products/{id}/svgs` and `easyeda.com/api/components/{uuid}` endpoints are the key integration points for JLCPCB component data.
 2. **Shape format is tilde-delimited**: EasyEDA's internal shape representation uses `~` as delimiter with type as first token.

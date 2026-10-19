@@ -4,7 +4,7 @@
 
 Please use GitHub's private vulnerability reporting:
 
-https://github.com/roboalchemist/auto-kicad/security/advisories/new
+https://github.com/roboalchemist/kicad-agent/security/advisories/new
 
 Do not open a public issue for a security problem. Include the affected component
 (agent, engine, server, web UI), a reproduction, and the impact you expect.

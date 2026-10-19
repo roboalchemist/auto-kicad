@@ -254,7 +254,7 @@ python3 Inductor_SMD.py Inductor_SMD.yml
 | `scripts/Packages/ipc_definitions.yaml` | IPC-7351 pad calculation constants |
 | `scripts/Packages/*/size_definitions/*.yaml` | Per-package-type device dimension databases |
 
-## Relevance for auto-kicad
+## Relevance for kicad-agent
 
 **High relevance**. This framework demonstrates:
 - The complete data model needed for footprint generation (pads, lines, arcs, text, 3D models)

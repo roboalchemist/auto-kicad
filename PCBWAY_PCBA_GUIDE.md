@@ -280,4 +280,4 @@ For consigned orders: production cannot start until your parts arrive at the PCB
 - `JLCPCB_PCBA_GUIDE.md` — JLCPCB equivalent (cheaper for SMT prototypes, catalog-based)
 - `demo/drc_rules.py` — 27-check DRC engine against JLCPCB manufacturing rules (rules largely apply to PCBWay too)
 - `data/jlcpcb-components.sqlite3` — local JLCPCB parts DB; LCSC MPNs from here work in PCBWay BOM
-- `README.md` — auto-kicad project overview
+- `README.md` — kicad-agent project overview
