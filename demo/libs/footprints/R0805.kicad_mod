@@ -1,0 +1,119 @@
+(footprint "R0805"
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(layer "F.Cu")
+	(descr "R0805 footprint")
+	(tags "R0805 footprint C17414")
+	(property "Reference" "REF**"
+		(at 3 0 0)
+		(layer "F.SilkS")
+		(uuid "8266130f-5e15-4692-b71d-aac3ef007c22")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "R0805"
+		(at 0 2.917094 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "45dd86ba-929a-4237-9161-b03426c6e673")
+		(effects
+			(font
+				(size 0.5 0.5)
+				(thickness 0.08)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "3c0bc924-c861-4717-ad7c-9ba383d1b3dc")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "366024a5-4486-4963-ae2a-03564506fa30")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(fp_poly
+		(pts
+			(xy -1.700025 0.640005) (xy -1.700025 -0.63998) (xy -1.650013 -0.689992) (xy -0.5 -0.689992) (xy -0.450013 -0.63998)
+			(xy -0.444983 -0.229947) (xy -0.894996 -0.229947) (xy -0.894996 0.220041) (xy -0.454991 0.220041)
+			(xy -0.450013 0.640005) (xy -0.5 0.690018) (xy -1.650013 0.690018)
+		)
+		(stroke
+			(width 0.15)
+			(type solid)
+		)
+		(fill yes)
+		(layer "F.Paste")
+		(uuid "232306a1-4439-4845-9868-2ea39dfe8916")
+	)
+	(fp_poly
+		(pts
+			(xy 0.449987 0.640005) (xy 0.450013 0.220041) (xy 0.894996 0.220041) (xy 0.894996 -0.229947) (xy 0.455017 -0.229947)
+			(xy 0.449987 -0.63998) (xy 0.5 -0.689992) (xy 1.649987 -0.689992) (xy 1.7 -0.63998) (xy 1.7 0.640005)
+			(xy 1.649987 0.690018) (xy 0.5 0.690018)
+		)
+		(stroke
+			(width 0.15)
+			(type solid)
+		)
+		(fill yes)
+		(layer "F.Paste")
+		(uuid "44c3a1ad-e04b-44fd-aa7b-74ab88f24ad1")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(uuid "8b8849a5-6016-4756-828e-89d427315e19")
+		(effects
+			(font
+				(size 0.6 0.6)
+				(thickness 0.1)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at -1 0)
+		(size 1.132537 1.377013)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "a46e0702-30ea-4e65-a201-8c2e8efb622b")
+	)
+	(pad "2" smd rect
+		(at 1 0)
+		(size 1.132537 1.377013)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "854ae719-fd0f-4b27-935d-f137bb98f4f1")
+	)
+	(embedded_fonts no)
+	(model "packages3d/R0805.step"
+		(offset
+			(xyz -1.413001979 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

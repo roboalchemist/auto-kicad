@@ -1,0 +1,131 @@
+(footprint "LED0805-RD"
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(layer "F.Cu")
+	(descr "LED0805-RD footprint")
+	(tags "LED0805-RD footprint C84256")
+	(property "Reference" "REF**"
+		(at 0 -3 0)
+		(layer "F.SilkS")
+		(uuid "8291d487-dedf-42e2-80d7-4deeee2ccd96")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "LED0805-RD"
+		(at -0.06002 2.950013 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "c78d0737-a788-4c94-afa9-7c502fd99abd")
+		(effects
+			(font
+				(size 0.5 0.5)
+				(thickness 0.08)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "3175a2dc-8d66-41c2-9850-854603ee56a1")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "19592328-ca48-4398-a274-939eb196c3e6")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(fp_poly
+		(pts
+			(xy -1.6 0) (xy -0.6 0) (xy -0.6 -0.149987) (xy -1.6 -0.149987)
+		)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill yes)
+		(layer "F.Fab")
+		(uuid "19f1f671-78aa-4484-893a-537fbd9d9ac3")
+	)
+	(fp_poly
+		(pts
+			(xy 0.634646 0.094209) (xy 1.634646 0.094209) (xy 1.634646 -0.055779) (xy 0.634646 -0.055779)
+		)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill yes)
+		(layer "F.Fab")
+		(uuid "2c90c7b9-6c9c-43ad-b3b0-7d2e682adcdd")
+	)
+	(fp_poly
+		(pts
+			(xy 1 -0.699975) (xy 1.2 -0.699975) (xy 1.2 0.700025) (xy 1 0.700025)
+		)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill yes)
+		(layer "F.Fab")
+		(uuid "2ecdb861-43a2-41cf-bbc9-e3edb2a097d0")
+	)
+
+
+
+
+	(fp_text user "${REFERENCE}"
+		(at -0.06002 -0.004991 0)
+		(layer "F.Fab")
+		(uuid "e6c9327b-b0e3-4303-9476-6c4eaaabdc99")
+		(effects
+			(font
+				(size 0.6 0.6)
+				(thickness 0.1)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at -1.100127 -0.000102 180)
+		(size 1 1.250013)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "3d71b0f6-9cec-4a05-a393-a115d3ebf957")
+	)
+	(pad "2" smd rect
+		(at 1.100025 -0.000102 180)
+		(size 1 1.250013)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "317ad785-87fb-4628-b67c-90a80e0b3ed7")
+	)
+	(embedded_fonts no)
+	(model "packages3d/LED0805-RD.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)
