@@ -2,7 +2,7 @@
 """
 555 LED Blinker — Redesigned PCB layout following PCB design rules.
 
-Design philosophy (from .claude/rules/):
+Design philosophy (from .agents/rules/):
   - placement.md: ICs first, decoupling cap right at the power pins, timing
     components adjacent to IC, signal flow left-to-right
   - routing.md: 45-degree bends (no 90°), consistent trace widths, minimize

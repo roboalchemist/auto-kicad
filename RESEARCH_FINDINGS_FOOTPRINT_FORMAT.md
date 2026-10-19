@@ -157,7 +157,7 @@ for fp_match in re.finditer(
    - Conversion script: `scripts/convert_footprint_kicad5_to_8.py`
 
 2. **Update project docs** (RECOMMENDED)
-   - Add format compatibility note to `.claude/CLAUDE.md`
+   - Add format compatibility note to `.agents/CLAUDE.md`
    - Reference conversion resources in README
    - Document DRC validation approach (GUI vs CLI)
 

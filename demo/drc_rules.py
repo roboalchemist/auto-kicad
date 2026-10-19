@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 
-RULES_DIR = ".claude/rules"
+RULES_DIR = ".agents/rules"
 
 # Maps rule name → (rule file, section heading) for citation in reports
 RULE_REFS: dict[str, tuple[str, str]] = {

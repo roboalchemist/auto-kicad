@@ -34,7 +34,7 @@ The spike code and recorded streams are in [`spikes/2026-10-16/`](spikes/2026-10
 - **Against:** the adapter is 0.0.x, and the spike needed six workarounds (below).
 
 **Not recommended:**
-- **Claude Agent SDK:** AG-UI only through a community adapter, Claude-only, one CLI subprocess per session, and its file checkpoints miss edits made by custom tools ([hosting](https://code.claude.com/docs/en/agent-sdk/hosting)).
+- **Claude Agent SDK:** AG-UI only through a community adapter, Claude-only, one CLI subprocess per session, and its file checkpoints miss edits made by custom tools ([hosting](https://code.agents.com/docs/en/agent-sdk/hosting)).
 - **OpenAI Agents SDK:** no AG-UI adapter ([ag-ui#2210](https://github.com/ag-ui-protocol/ag-ui/pull/2210) open since July).
 - **Google ADK, Microsoft Agent Framework, Strands, Agno:** each has an AG-UI adapter, but they offer weaker Claude support or less traction for this job (see the table in [Backends compared](#backends-compared)).
 

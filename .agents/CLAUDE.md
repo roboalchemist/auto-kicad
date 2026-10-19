@@ -6,7 +6,7 @@ Research and development project for AI-driven PCB design using KiCad. Goal: ena
 
 ```
 kicad-claude/
-├── .claude/
+├── .agents/
 │   ├── CLAUDE.md           # This file
 │   ├── commands/
 │   │   └── pcb-review.md   # /pcb-review slash command: 12 parallel domain review agents
@@ -116,7 +116,7 @@ Fallback: hardcoded LCSC IDs (`C7593`, `C17414`, etc.) if DB unavailable.
 
 ### `demo/do_layout_v2.py` — Rule-Compliant Layout (Current Best)
 
-Improved layout following all `.claude/rules/pcb-*.md` constraints:
+Improved layout following all `.agents/rules/pcb-*.md` constraints:
 - Signal flow left-to-right, ICs first; C3 bypass cap between U1 pin 8 (VCC) and pin 1 (GND), ~2.6mm from each
 - 45-degree routing only (no 90° bends); 0.25mm signals, 0.5mm VCC/GND
 - Everything on F.Cu except one B.Cu link from U1.4 (RESET) to VCC: 2 vias. R2 and C1 are rotated 180° so their THRESHOLD pads face U1
@@ -202,7 +202,7 @@ The intermediate format used to pass board data between `layout.py` and `drc_rul
 
 ## Design Knowledge Base
 
-### `.claude/rules/` — 23 Rule Files (Auto-Loaded)
+### `.agents/rules/` — 23 Rule Files (Auto-Loaded)
 
 Loaded as context for every Claude session in this project:
 
@@ -215,7 +215,7 @@ Loaded as context for every Claude session in this project:
 | Manufacturing | `pcb-dfm`, `pcb-silkscreen`, `pcb-hdi`, `pcb-test-debug` |
 | Reliability | `pcb-thermal`, `pcb-power`, `pcb-reliability`, `pcb-version-control` |
 
-### `.claude/skills/pcb-design/` — Progressive-Loading Skill
+### `.agents/skills/pcb-design/` — Progressive-Loading Skill
 
 Topic-indexed reference docs in `reference/` (read only what's needed per task):
 
@@ -238,7 +238,7 @@ reference/
     ├── git-workflow.md, release-management.md
 ```
 
-### `.claude/commands/pcb-review.md` — `/pcb-review` Command
+### `.agents/commands/pcb-review.md` — `/pcb-review` Command
 
 Runs a 12-domain parallel design review using background sub-agents:
 

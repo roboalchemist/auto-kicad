@@ -9,7 +9,7 @@ Notes for anyone (human or agent) working in this repo. The long-form harness de
   (`web/`). This is where almost all current work happens.
 - `demo/` — the standalone 555 blinker pipeline from before the harness: skidl netlist,
   placement/routing, and `layout.py`, a pure-Python KiCad S-expression library.
-- `.claude/rules/`, `.claude/skills/` — PCB design knowledge loaded as agent context.
+- `.agents/rules/`, `.agents/skills/` — PCB design knowledge loaded as agent context.
 - `research/` — notes plus public third-party tools/databases as git submodules.
 - `data/` — the JLCPCB parts database (Git LFS).
 
@@ -67,7 +67,7 @@ $KICAD_PYTHON demo/drc_rules.py demo/render_data_v2.json
 ```
 
 `kicad-cli` is the authority on copper (shorts, clearance, unconnected, mask bridges).
-`drc_rules.py` checks JLCPCB and design-intent rules and cites the `.claude/rules` source
+`drc_rules.py` checks JLCPCB and design-intent rules and cites the `.agents/rules` source
 for each violation. Exit 2 means it could not load `pcbnew` or a footprint and checked
 nothing.
 
@@ -85,6 +85,6 @@ JLC Basic part, and `components_fts` is empty — search with `LIKE`.
 
 ## Rules
 
-`.claude/rules/pcb-*.md` and the matching `reference/*.md` files under
-`.claude/skills/pcb-design/` overlap heavily. When editing a rule, update both copies and
+`.agents/rules/pcb-*.md` and the matching `reference/*.md` files under
+`.agents/skills/pcb-design/` overlap heavily. When editing a rule, update both copies and
 `RULE_REFS` in `demo/drc_rules.py`, which cites filenames and section headings.

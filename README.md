@@ -19,7 +19,7 @@ criteria (DRC counts, board size, distances, regions, open comments) pass.
   measure mode, version browser, goal editor, and a real three.js 3D viewer.
 - **Demo pipeline** (`demo/`) — a 555 LED blinker taken from parts search to a routed,
   DRC-clean board, using a pure-Python S-expression layout library.
-- **PCB knowledge base** (`.claude/`) — 25 rules and a skill covering stackup, placement,
+- **PCB knowledge base** (`.agents/`) — 25 rules and a skill covering stackup, placement,
   routing, DFM, EMC, thermal, high-speed and more, loaded as agent context.
 
 ## How it works
@@ -155,7 +155,7 @@ S-expressions (no `pcbnew` needed); `demo/drc_rules.py` is the design-intent che
 | `harness/web/` | React UI: board viewer, 3D viewer, review, versions, goals |
 | `harness/tests/` | Python tests (scripted models, real KiCad) |
 | `demo/` | Standalone 555 blinker pipeline and the `BoardLayout` library |
-| `.claude/rules/`, `.claude/skills/` | PCB design knowledge base used as agent context |
+| `.agents/rules/`, `.agents/skills/` | PCB design knowledge base used as agent context |
 | `research/` | Notes and public third-party tools/databases (git submodules) |
 | `data/` | JLCPCB parts database (Git LFS) |
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Run a comprehensive design review by checking the board against every rule file in `.claude/rules/pcb-*.md` using parallel sub-agents. Each agent reviews one domain and reports PASS, VIOLATIONS, and SUGGESTIONS.
+Run a comprehensive design review by checking the board against every rule file in `.agents/rules/pcb-*.md` using parallel sub-agents. Each agent reviews one domain and reports PASS, VIOLATIONS, and SUGGESTIONS.
 
 ## Review Domains
 
@@ -40,7 +40,7 @@ You are reviewing a PCB layout for compliance with [DOMAIN] rules.
 DO NOT write any code — research only.
 
 Read these files:
-1. .claude/rules/pcb-[rule-file] — the design rules
+1. .agents/rules/pcb-[rule-file] — the design rules
 2. [layout script path] — component positions and routing code
 3. [render data JSON path] — board data (components, tracks, vias, outline)
 

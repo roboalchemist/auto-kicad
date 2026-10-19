@@ -235,7 +235,7 @@ python demo/drc_rules.py render_data.json
 
 ### For Documentation
 📝 **Optional but recommended**:
-- Add format compatibility note to `.claude/CLAUDE.md`
+- Add format compatibility note to `.agents/CLAUDE.md`
 - Link to conversion resources in README
 - Note that GUI DRC is preferred over CLI
 

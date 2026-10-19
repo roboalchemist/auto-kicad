@@ -3,7 +3,7 @@
 ## 2026-03-15 — PCB redesign, DRC engine, design review framework
 
 ### What was done
-- Redesigned 555 timer LED blinker PCB layout following all `.claude/rules/pcb-*.md` rules
+- Redesigned 555 timer LED blinker PCB layout following all `.agents/rules/pcb-*.md` rules
 - Board went from 30x24mm (720mm²) to 21x18mm (378mm²), 71.7% compactness
 - Fixed silkscreen: removed body outlines from footprints, moved ref des text beside components, fixed text sizes to JLCPCB minimums (1.0mm height, 0.15mm thickness)
 - Fixed pad overlaps and via-to-pad clearance violations (verified via pcbnew API)
@@ -18,7 +18,7 @@
 
 ### Design review framework
 - Ran 8-agent parallel review (`/pcb-review` pattern) covering placement, routing, power, DFM, EMC, thermal, test/debug, mechanical
-- Created `/pcb-review` slash command (`.claude/commands/pcb-review.md`)
+- Created `/pcb-review` slash command (`.agents/commands/pcb-review.md`)
 - Added `reference/review.md` to pcb-design skill with agent prompt template and 12-domain checklist
 - Most review findings now caught automatically by `drc_rules.py`
 

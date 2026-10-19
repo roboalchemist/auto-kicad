@@ -4,7 +4,7 @@ allowed-tools: Agent, TaskCreate, TaskList, TaskUpdate, TaskGet, Read, Glob, Gre
 
 # PCB Design Review
 
-Run a comprehensive design review of the current PCB layout against all `.claude/rules/pcb-*.md` rule files using parallel sub-agents.
+Run a comprehensive design review of the current PCB layout against all `.agents/rules/pcb-*.md` rule files using parallel sub-agents.
 
 ## Instructions
 
@@ -33,7 +33,7 @@ Run a comprehensive design review of the current PCB layout against all `.claude
 You are reviewing a PCB layout for compliance with [DOMAIN] rules. DO NOT write any code — research only.
 
 Read these files:
-1. .claude/rules/pcb-[rule-file] — the design rules
+1. .agents/rules/pcb-[rule-file] — the design rules
 2. [layout script path] — component positions and routing code
 3. [render data JSON path] — board data (components, tracks, vias, outline)
 
