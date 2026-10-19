@@ -4,7 +4,7 @@ This directory contains comprehensive research and practical guides for programm
 
 ## Documents Overview
 
-### 1. **KICAD_FOOTPRINT_GENERATORS.md** (Main Reference)
+### 1. **../guides/KICAD_FOOTPRINT_GENERATORS.md** (Main Reference)
 Comprehensive overview of footprint generation approaches, tools, and technologies.
 
 **Contains:**
@@ -81,7 +81,7 @@ Complete, runnable Python examples demonstrating footprint generation.
 **Write custom Python generators**
 1. Read: FOOTPRINT_QUICK_REFERENCE.md → "Option B"
 2. Code: FOOTPRINT_CODE_EXAMPLES.md → Examples 1-2
-3. Reference: KICAD_FOOTPRINT_GENERATORS.md → "KicadModTree" section
+3. Reference: ../guides/KICAD_FOOTPRINT_GENERATORS.md → "KicadModTree" section
 
 **Automate from part database (JLCPCB)**
 1. Read: FOOTPRINT_QUICK_REFERENCE.md → "Option C"
@@ -98,7 +98,7 @@ Complete, runnable Python examples demonstrating footprint generation.
 3. Code: FOOTPRINT_CODE_EXAMPLES.md → Examples 1-3
 
 **Find the right tool for my use case**
-1. Read: KICAD_FOOTPRINT_GENERATORS.md → "Use Case Decision Tree"
+1. Read: ../guides/KICAD_FOOTPRINT_GENERATORS.md → "Use Case Decision Tree"
 2. Reference: FOOTPRINT_QUICK_REFERENCE.md → Tool Comparison Matrix
 3. Explore: FOOTPRINT_TOOLS_DIRECTORY.md → specific tool
 
@@ -241,7 +241,7 @@ for part in fetch_jlcpcb_parts():
 ```
 kicad-claude/
 ├── README_FOOTPRINT_RESEARCH.md          (This file - Navigation guide)
-├── KICAD_FOOTPRINT_GENERATORS.md         (Comprehensive reference)
+├── ../guides/KICAD_FOOTPRINT_GENERATORS.md         (Comprehensive reference)
 ├── FOOTPRINT_QUICK_REFERENCE.md          (TL;DR quick start)
 ├── FOOTPRINT_TOOLS_DIRECTORY.md          (Tool catalog & links)
 └── FOOTPRINT_CODE_EXAMPLES.md            (7 runnable examples)
@@ -288,7 +288,7 @@ After generating a footprint, verify:
 
 2. **Read relevant documentation**
    - Start with FOOTPRINT_QUICK_REFERENCE.md
-   - Dive deeper with KICAD_FOOTPRINT_GENERATORS.md
+   - Dive deeper with ../guides/KICAD_FOOTPRINT_GENERATORS.md
 
 3. **Run an example**
    - Pick one from FOOTPRINT_CODE_EXAMPLES.md
@@ -310,13 +310,13 @@ After generating a footprint, verify:
 ## Questions & Troubleshooting
 
 ### "Which tool should I use?"
-See FOOTPRINT_QUICK_REFERENCE.md → "Tool Comparison Matrix" and KICAD_FOOTPRINT_GENERATORS.md → "Use Case Decision Tree"
+See FOOTPRINT_QUICK_REFERENCE.md → "Tool Comparison Matrix" and ../guides/KICAD_FOOTPRINT_GENERATORS.md → "Use Case Decision Tree"
 
 ### "How do I get started fastest?"
 Follow the 5-minute guide above, or pick one of the three options in FOOTPRINT_QUICK_REFERENCE.md
 
 ### "What are best practices?"
-See KICAD_FOOTPRINT_GENERATORS.md → "Pro Tips" section
+See ../guides/KICAD_FOOTPRINT_GENERATORS.md → "Pro Tips" section
 
 ### "My footprint doesn't work"
 See the "Validation Checklist" and "Common Pitfalls" sections above
@@ -364,6 +364,6 @@ KiCad footprint generation is well-supported by a mature ecosystem:
 
 **Dive deeper with**: FOOTPRINT_CODE_EXAMPLES.md to see working code
 
-**Reference always**: KICAD_FOOTPRINT_GENERATORS.md for comprehensive details
+**Reference always**: ../guides/KICAD_FOOTPRINT_GENERATORS.md for comprehensive details
 
 Happy generating!

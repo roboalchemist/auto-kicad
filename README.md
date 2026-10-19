@@ -155,6 +155,7 @@ S-expressions (no `pcbnew` needed); `demo/drc_rules.py` is the design-intent che
 | `harness/web/` | React UI: board viewer, 3D viewer, review, versions, goals |
 | `harness/tests/` | Python tests (scripted models, real KiCad) |
 | `demo/` | Standalone 555 blinker pipeline and the `BoardLayout` library |
+| `docs/` | Guides, footprint research and the engineering log ([index](docs/INDEX.md)) |
 | `.agents/rules/`, `.agents/skills/` | PCB design knowledge base used as agent context |
 | `research/` | Notes and public third-party tools/databases (git submodules) |
 | `data/` | JLCPCB parts database (Git LFS) |

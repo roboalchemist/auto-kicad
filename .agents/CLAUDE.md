@@ -51,11 +51,11 @@ kicad-claude/
 ├── test_samples/
 │   └── datasheets/         # Component datasheets (e.g., MCP3008.pdf)
 ├── FOOTPRINT_*.md          # Footprint generation research documents
-├── INDEX.md                # Research index (footprint generation docs)
-├── WORKLOG.md              # Session-by-session progress log
-├── KICAD_DRC_GUIDE.md      # DRC research and reference
-├── KICAD_FORMAT_QUICK_REF.md  # KiCad S-expression format reference
-├── KICAD_5_TO_8_FOOTPRINT_CONVERSION.md  # Footprint format conversion guide
+├── docs/INDEX.md                # Research index (footprint generation docs)
+├── docs/WORKLOG.md              # Session-by-session progress log
+├── docs/guides/KICAD_DRC_GUIDE.md      # DRC research and reference
+├── docs/guides/KICAD_FORMAT_QUICK_REF.md  # KiCad S-expression format reference
+├── docs/guides/KICAD_5_TO_8_FOOTPRINT_CONVERSION.md  # Footprint format conversion guide
 ├── blinker_sklib.py        # ⚠️ Artifact: duplicate of demo/blinker_sklib.py (skidl generated)
 └── blinker.erc / blinker.log  # ⚠️ Artifacts: skidl output from root-level runs
 ```
@@ -299,14 +299,14 @@ Best candidate: **lamaalrajih/kicad-mcp** — CLI-first (no pcbnew dependency), 
 Primary approach: JLCPCB SQLite DB → JLC2KiCad_lib → KiCad symbols/footprints. Fallback: hardcoded LCSC IDs in `blinker.py`.
 
 ### Footprint Generation
-Primary tool: **pointhi/kicad-footprint-generator** (KicadModTree + parametric YAML). 5 research docs: `FOOTPRINT_*.md`, `INDEX.md`.
+Primary tool: **pointhi/kicad-footprint-generator** (KicadModTree + parametric YAML). 5 research docs: `FOOTPRINT_*.md`, `docs/INDEX.md`.
 
 ### KiCad Format
 - KiCad 8 uses `(footprint ...)`, KiCad 5 uses `(module ...)` — converter at `scripts/convert_footprint_kicad5_to_8.py`
-- S-expression format reference: `KICAD_FORMAT_QUICK_REF.md`
-- DRC format: `KICAD_DRC_GUIDE.md`, `DRC_QUICK_REFERENCE.md`
+- S-expression format reference: `docs/guides/KICAD_FORMAT_QUICK_REF.md`
+- DRC format: `docs/guides/KICAD_DRC_GUIDE.md`, `docs/guides/DRC_QUICK_REFERENCE.md`
 
-## Current State (from WORKLOG.md)
+## Current State (from docs/WORKLOG.md)
 
 **Demo board**: 555 LED blinker, 2-layer, 25×20mm, 8 components (NE555 SOIC-8, 3 resistors, 2 caps, 1 bypass cap C3, 1 LED — all 0805)
 

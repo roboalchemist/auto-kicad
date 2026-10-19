@@ -152,8 +152,8 @@ for fp_match in re.finditer(
 
 ### Optional (Defensive) Actions
 1. **Add conversion documentation** (COMPLETED)
-   - Full format guide: `KICAD_5_TO_8_FOOTPRINT_CONVERSION.md`
-   - Quick reference: `KICAD_FORMAT_QUICK_REF.md`
+   - Full format guide: `../guides/KICAD_5_TO_8_FOOTPRINT_CONVERSION.md`
+   - Quick reference: `../guides/KICAD_FORMAT_QUICK_REF.md`
    - Conversion script: `scripts/convert_footprint_kicad5_to_8.py`
 
 2. **Update project docs** (RECOMMENDED)
@@ -250,13 +250,13 @@ grep -q '(version 20240108)' test_output.kicad_mod  # Should succeed
 ## References
 
 ### Created Documentation
-1. **KICAD_5_TO_8_FOOTPRINT_CONVERSION.md** (13 KB)
+1. **../guides/KICAD_5_TO_8_FOOTPRINT_CONVERSION.md** (13 KB)
    - Comprehensive format reference
    - Conversion methods (GUI, Python, CLI)
    - JLC2KiCad_lib compatibility analysis
    - Full S-expression examples
 
-2. **KICAD_FORMAT_QUICK_REF.md** (3 KB)
+2. **../guides/KICAD_FORMAT_QUICK_REF.md** (3 KB)
    - Quick comparison table
    - TL;DR conversion methods
    - Compatibility matrix

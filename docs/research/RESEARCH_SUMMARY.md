@@ -32,14 +32,14 @@
 
 ### Documentation (Read These)
 
-1. **KICAD_5_TO_8_FOOTPRINT_CONVERSION.md** (comprehensive, 13 KB)
+1. **../guides/KICAD_5_TO_8_FOOTPRINT_CONVERSION.md** (comprehensive, 13 KB)
    - Full technical breakdown of format differences
    - 5 different conversion methods with code examples
    - JLC2KiCad_lib analysis and DRC compatibility
    - Real-world examples and troubleshooting
    - **Read this for**: Complete understanding of the formats
 
-2. **KICAD_FORMAT_QUICK_REF.md** (quick reference, 3 KB)
+2. **../guides/KICAD_FORMAT_QUICK_REF.md** (quick reference, 3 KB)
    - One-page comparison table
    - TL;DR conversion methods
    - Compatibility matrix
@@ -89,7 +89,7 @@ Do you have legacy KiCad 5 footprints?
       │  → python scripts/convert_footprint_kicad5_to_8.py old.kicad_mod new.kicad_mod
       │
       └─ Manual regex (advanced)
-         → See KICAD_FORMAT_QUICK_REF.md section "Method 3"
+         → See ../guides/KICAD_FORMAT_QUICK_REF.md section "Method 3"
 ```
 
 ---
@@ -198,7 +198,7 @@ python demo/drc_rules.py render_data.json
 
 ## When to Use Each Resource
 
-### KICAD_5_TO_8_FOOTPRINT_CONVERSION.md
+### ../guides/KICAD_5_TO_8_FOOTPRINT_CONVERSION.md
 **Read if you need**:
 - Deep dive into format structure
 - All 5 conversion methods with examples
@@ -206,7 +206,7 @@ python demo/drc_rules.py render_data.json
 - Real-world KiCad 5 → 8 examples
 - Detailed troubleshooting
 
-### KICAD_FORMAT_QUICK_REF.md
+### ../guides/KICAD_FORMAT_QUICK_REF.md
 **Read if you need**:
 - Quick conversion method lookup
 - One-page comparison
@@ -256,13 +256,13 @@ Pick one based on your needs:
 | **Using kicad-claude as-is** | ✅ Nothing — you're all set |
 | **Converting legacy KiCad 5 library** | Run `scripts/convert_footprint_kicad5_to_8.py` |
 | **Need DRC on JLC2KiCad_lib footprints** | Use pcbnew GUI DRC (Inspect > Design Rule Checker) |
-| **Writing docs for users** | Link to KICAD_FORMAT_QUICK_REF.md |
+| **Writing docs for users** | Link to ../guides/KICAD_FORMAT_QUICK_REF.md |
 | **Troubleshooting format issues** | Check RESEARCH_FINDINGS_FOOTPRINT_FORMAT.md |
 
 ### Step 2: Reference These Docs
 - **For you**: RESEARCH_FINDINGS_FOOTPRINT_FORMAT.md
-- **For users**: KICAD_FORMAT_QUICK_REF.md
-- **For deep dive**: KICAD_5_TO_8_FOOTPRINT_CONVERSION.md
+- **For users**: ../guides/KICAD_FORMAT_QUICK_REF.md
+- **For deep dive**: ../guides/KICAD_5_TO_8_FOOTPRINT_CONVERSION.md
 
 ### Step 3: Keep Script Handy
 ```bash
@@ -276,8 +276,8 @@ Available for batch conversion if needed in future.
 
 ```
 the repository root
-├── KICAD_5_TO_8_FOOTPRINT_CONVERSION.md        (13 KB, comprehensive)
-├── KICAD_FORMAT_QUICK_REF.md                   (3 KB, quick ref)
+├── ../guides/KICAD_5_TO_8_FOOTPRINT_CONVERSION.md        (13 KB, comprehensive)
+├── ../guides/KICAD_FORMAT_QUICK_REF.md                   (3 KB, quick ref)
 ├── RESEARCH_FINDINGS_FOOTPRINT_FORMAT.md       (5 KB, findings)
 ├── RESEARCH_SUMMARY.md                         (this file)
 └── scripts/
@@ -295,8 +295,8 @@ the repository root
 ## Questions?
 
 Refer to:
-1. **Quick answer?** → KICAD_FORMAT_QUICK_REF.md
-2. **How does it work?** → KICAD_5_TO_8_FOOTPRINT_CONVERSION.md
+1. **Quick answer?** → ../guides/KICAD_FORMAT_QUICK_REF.md
+2. **How does it work?** → ../guides/KICAD_5_TO_8_FOOTPRINT_CONVERSION.md
 3. **Project integration?** → RESEARCH_FINDINGS_FOOTPRINT_FORMAT.md
 4. **Convert a file?** → `python scripts/convert_footprint_kicad5_to_8.py`
 
