@@ -139,6 +139,6 @@ def resolve(model: str):
 
     cfg = config_mod.get()
     if not cfg.bifrost_api_key:
-        raise ValueError("no Bifrost API key (set BIFROST_API_KEY or ~/.local/share/opencode/bifrost.key)")
+        raise ValueError("no Bifrost API key (set BIFROST_API_KEY)")
     provider = OpenAIProvider(base_url=cfg.bifrost_base_url, api_key=cfg.bifrost_api_key)
     return OpenAIChatModel(model[len(BIFROST_PREFIX):], provider=provider)

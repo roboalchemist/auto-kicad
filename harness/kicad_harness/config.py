@@ -11,15 +11,9 @@ REPO_DIR = HARNESS_DIR.parent
 
 
 def _bifrost_key() -> str | None:
-    """BIFROST_API_KEY, else opencode's key file (the same key its bifrost provider uses)."""
+    """The gateway key, from BIFROST_API_KEY."""
     env = os.environ.get("BIFROST_API_KEY")
-    if env:
-        return env.strip()
-    path = Path.home() / ".local" / "share" / "opencode" / "bifrost.key"
-    try:
-        return path.read_text().strip() or None
-    except OSError:
-        return None
+    return env.strip() if env else None
 
 
 def _env_path(name: str, default: Path) -> Path:
@@ -56,8 +50,7 @@ class Config:
         default_factory=lambda: os.environ.get("BIFROST_BASE_URL", "")
     )
     bifrost_api_key: str | None = field(default_factory=_bifrost_key)
-    # Optional curated list; otherwise the gateway's chat models + the aliases configured for
-    # the user's opencode Bifrost providers are offered.
+    # Optional curated list; otherwise the gateway's own chat-model list is offered.
     bifrost_models: list[str] = field(
         default_factory=lambda: [m.strip() for m in os.environ.get("BIFROST_MODELS", "").split(",") if m.strip()]
     )

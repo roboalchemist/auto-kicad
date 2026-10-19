@@ -155,7 +155,7 @@
 ## 2026-10-17 — Real-Claude browser e2e and ship
 
 ### What was done
-- **Restored the Claude route.** Both OpenRouter keys used during development were unusable (401 "User not found"ot found"; `env/OPENROUTER_API_KEY`, named "generic key" on the account, capped at $20 with $20.01 used). The 1Password `OPENROUTER_MGMNT_KEY` still works, so I listed the account keys, confirmed $17.63 of account credit remained, and created a **dedicated key for this project** (`auto-kicad-harness`, limit $10) rather than raising the shared key's cap. Saved as `env/OPENROUTER_KICAD_HARNESS`; README/AGENTS now point at it.
+- **Restored the Claude route.** The shared OpenRouter keys used earlier had hit their limits, so this project got a dedicated key with a small cap. The route itself stayed `openai:anthropic/claude-sonnet-5` via an OpenAI-compatible provider.
 - **Re-ran both browser walkthroughs against real Claude** (`openai:anthropic/claude-sonnet-5` via OpenRouter) on the fixed server, from a freshly seeded `blinker-demo`:
   - `agent.mjs`: 27 tool cards; the autonomous goal run made 22 tool calls over 13 versions (outline → 9 footprint moves → query → rip-up → ref text → Freerouting autoroute → check → render → mark_addressed → check) and the persisted event stream ends with `goal_met: true`. Steering, supervised approval (`set_board_outline` → Approve → applied, version a03ce8c), show_version + compare_versions, and Activity replay all worked. Zero console errors.
   - `walk.mjs`: 14 flows passed — comment with tags/Must-fix, thread pins and cards, measure 9.6025 mm, select popover, view old revision + back, diff overlay (66 removed), back-side filter, 3D render, branch create/switch, restore ("Restore eb86be1").

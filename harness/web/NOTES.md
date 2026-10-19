@@ -136,10 +136,9 @@ Agent tab (agent.mjs, screenshots 20–26):
 - e2e scripts: agent.mjs waits for the chat run to finish before Run-goal (the button is disabled
   while a run is active); walk.mjs waits for hit paths with real area (zero-area track lines are
   "invisible" to Playwright) and picks a version pair with a non-empty diff.
-- Model note: the OpenRouter keys available during development stopped working (401), so the
-  "User not found", `OPENROUTER_API_KEY` → 403 key limit $20.01/$20). Post-merge browser e2e ran on
-  `google:gemini-3.1-pro-preview` — needs `pydantic-ai-slim[google]`, now a
-  declared extra.
+- Model note: the OpenRouter keys available during development stopped working (limits), so the
+  post-merge browser e2e ran on `google:gemini-3.1-pro-preview` — needs `pydantic-ai-slim[google]`,
+  now a declared extra.
 
 
 ## Colour scheme — KiCad Default (dark)

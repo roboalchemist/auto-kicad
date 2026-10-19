@@ -3,6 +3,8 @@ name = "kicad-harness"
 version = "0.1.0"
 description = "Agent harness for KiCad PCB design with a live, reviewable, versioned loop"
 requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Joseph Schlesinger" }]
 dependencies = [
     "pydantic-ai-slim[ag-ui,anthropic]==2.57.0",
     "fastapi>=0.140",
@@ -22,6 +24,11 @@ dev = ["pytest>=8", "pytest-asyncio>=0.24"]
 openai = ["openai>=1.40"]
 # google:... models, e.g. HARNESS_MODEL=google:gemini-3.1-pro-preview with GEMINI_API_KEY
 google = ["google-genai>=1.0"]
+
+[project.urls]
+Homepage = "https://github.com/roboalchemist/auto-kicad"
+Repository = "https://github.com/roboalchemist/auto-kicad"
+Issues = "https://github.com/roboalchemist/auto-kicad/issues"
 
 [project.scripts]
 kicad-harness = "kicad_harness.cli:app"

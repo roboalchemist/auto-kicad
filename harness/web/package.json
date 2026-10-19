@@ -39,5 +39,12 @@
   "allowScripts": {
     "better-sqlite3": true,
     "esbuild": true
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/roboalchemist/auto-kicad.git",
+    "directory": "harness/web"
+  },
+  "homepage": "https://github.com/roboalchemist/auto-kicad"
 }
