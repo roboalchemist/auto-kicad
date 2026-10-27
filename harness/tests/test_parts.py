@@ -1,0 +1,75 @@
+"""Part sourcing: the JLCPCB catalogue and i2cdb datasheets.
+
+The JLCPCB database is large and third-party; these tests skip when it isn't present rather
+than downloading anything. i2cdb needs the CLI and a token, so those skip too.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from kicad_harness.engine import parts
+
+needs_db = pytest.mark.skipif(not parts.available(), reason="no JLCPCB parts database here")
+needs_i2cdb = pytest.mark.skipif(
+    not parts.i2cdb_available() or not parts._token(), reason="no i2cdb CLI/token here"
+)
+
+
+def test_package_hint_reads_kicad_footprint_names() -> None:
+    assert parts.package_hint("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm") == "SOIC-8"
+    assert parts.package_hint("Resistor_SMD:R_0805_2012Metric") == "0805"
+    assert parts.package_hint("Package_TO_SOT_SMD:SOT-23") == "SOT-23"
+
+
+@needs_db
+def test_search_returns_stock_price_and_tier() -> None:
+    result = parts.search_jlc("NE555", limit=3)
+    assert result["parts"], result
+    p = result["parts"][0]
+    assert p["lcsc"].startswith("C") and p["mpn"] and p["package"]
+    assert p["tier"] in ("basic", "extended")
+    assert p["stock"] > 0 and p["unit_price"] is not None
+
+
+@needs_db
+def test_get_by_lcsc_accepts_both_forms() -> None:
+    a = parts.get_jlc("C7593")
+    assert a is not None and a["mpn"] == "NE555DR"
+    assert parts.get_jlc("7593")["lcsc"] == "C7593"
+    assert parts.get_jlc("C0") is None
+
+
+@needs_db
+def test_bad_lcsc_is_rejected() -> None:
+    with pytest.raises(parts.PartsError, match="not an LCSC code"):
+        parts.get_jlc("resistor")
+
+
+@needs_db
+def test_basic_only_filters_to_basic_parts() -> None:
+    result = parts.search_jlc(limit=5, basic_only=True)
+    assert all(p["basic"] for p in result["parts"])
+
+
+@needs_i2cdb
+def test_i2cdb_search_requires_a_prefix() -> None:
+    with pytest.raises(parts.PartsError, match="MPN prefix"):
+        parts.search_i2cdb("")
+    hits = parts.search_i2cdb("UCC287", limit=3)
+    assert hits["parts"] and hits["parts"][0]["mpn"].startswith("UCC287")
+
+
+@needs_db
+def test_check_part_reports_usable_and_supplier_datasheet() -> None:
+    """A stocked part is usable; when i2cdb lacks it, the JLC datasheet URL fills the gap."""
+    result = parts.check_part("NE555DR", lcsc="C7593")
+    assert result["usable_for_jlc"] is True
+    assert result["checks"]["jlcpcb"]["matches"][0]["lcsc"] == "C7593"
+
+
+@needs_db
+def test_check_part_flags_a_part_jlc_does_not_stock() -> None:
+    result = parts.check_part("ZZZNOTAPART999")
+    assert result["usable_for_jlc"] is False
+    assert any("JLCPCB" in n for n in result["notes"])

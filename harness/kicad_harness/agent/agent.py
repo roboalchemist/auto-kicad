@@ -95,12 +95,37 @@ def _snapshot(state: DesignState) -> StateSnapshotEvent:
 
 
 async def _working(ctx: RunContext[HarnessDeps]) -> tuple[str, dict]:
-    """Board hash and pick index of the working copy."""
+    """Board hash and pick index of the working copy; raises when there is no board."""
     svc = ctx.deps.services
-    data = _ws(ctx).board_path.read_bytes()
+    ws = _ws(ctx)
+    if not ws.board_path.is_file():
+        _require_board(ctx, "reading the board")
+    data = ws.board_path.read_bytes()
     board_hash, _ = await asyncio.to_thread(svc.artifacts.materialize, data)
     index = await asyncio.to_thread(svc.artifacts.index, board_hash)
     return board_hash, index
+
+
+def _require_board(ctx: RunContext[HarnessDeps], tool: str = "this tool"):
+    """Refuse a board-only operation while the design is still a schematic.
+
+    Raises ``ModelRetry`` so the model gets a clear instruction rather than an exception that
+    would count against the tool-retry budget and end the run.
+    """
+    ws = _ws(ctx)
+    if ws.phase() == "schematic" or not ws.board_path.is_file():
+        raise ModelRetry(
+            f"{tool} needs a board, but this design is in the schematic phase and has none yet. "
+            "Draw the schematic with the schematic tools (add_symbol, connect_pins, "
+            "generate_schematic_skidl) and call start_board_layout when ERC is clean; the board "
+            "tools work after that."
+        )
+
+
+def _empty_index() -> dict:
+    """A pick index with nothing on it, for the schematic phase."""
+    return {"board": {"edge_bbox": [0, 0, 0, 0], "bbox": [0, 0, 0, 0], "layers": ["F.Cu", "B.Cu"]},
+            "footprints": [], "pads": [], "tracks": [], "vias": [], "zones": [], "nets": []}
 
 
 async def _sync_state(ctx: RunContext[HarnessDeps], *, bump: bool = False) -> None:
@@ -110,6 +135,10 @@ async def _sync_state(ctx: RunContext[HarnessDeps], *, bump: bool = False) -> No
     st.head = ws.head()
     st.phase = ws.phase()
     st.brief = ws.brief()
+    if ws.phase() == "schematic" and not ws.board_path.is_file():
+        # Nothing to hash yet; the schematic's own hash tracks progress in this phase.
+        await _sync_schematic_state(ctx, bump=bump)
+        return
     board_hash, _ = await asyncio.to_thread(ctx.deps.services.artifacts.materialize, ws.board_path.read_bytes())
     if bump or board_hash != st.board_hash:
         st.revision += 1
@@ -475,6 +504,12 @@ Phases:
 - A design starts in the SCHEMATIC phase: there is no board yet, only `schematic.kicad_sch`. Draw the circuit, keep ERC clean (erc_errors/erc_warnings criteria), then call `start_board_layout`. That creates the board, places the footprints from KiCad's own netlist and assigns their nets, so layout starts electrically correct. After it, you are in the BOARD phase and move parts and route.
 - Prefer `generate_schematic_skidl` to draw a whole design from a parts and nets list; use the individual symbol and wiring tools to fix or extend it. Every part needs a real KiCad footprint (`Library:Footprint`) or it cannot be placed on the board.
 
+Part sourcing (do this before choosing parts):
+- Boards are assembled by JLCPCB, so a part is only real if JLCPCB stocks it. Use `find_parts` to search their catalogue (it reports stock, unit price, and whether a part is `basic` — no extra fee — or `extended` — a per-part reel fee). Prefer basic parts and large stock unless the user asks otherwise.
+- Use `check_part` on each part you intend to use: it returns the JLCPCB matches plus datasheet availability. If `usable_for_jlc` is false, say so and choose a stocked alternative rather than designing a board that cannot be made.
+- Use `part_datasheet` to confirm a pinout or rating when you are not certain; it returns datasheet text. If i2cdb has no record, a supplier datasheet URL is included — do not invent pin numbers you have not verified.
+- Mention the LCSC codes and the basic/extended split to the user when you finish the schematic.
+
 Conventions:
 - Coordinates are millimetres in KiCad board space: x to the right, y DOWN. Angles are degrees, counter-clockwise.
 - Refer to parts by reference designator (U1), pads as REF.PAD (U1.3), nets as net:NAME.
@@ -575,7 +610,12 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
     async def design_summary(ctx: RunContext[HarnessDeps]) -> ToolReturn:
         """Board outline, components (ref, value, footprint, position, side), nets, DRC counts, goal status and open review threads."""
         svc = ctx.deps.services
+        ws = _ws(ctx)
         await _sync_state(ctx)
+        if ws.phase() == "schematic" and not ws.board_path.is_file():
+            # A model's first move is often design_summary; answer it for the schematic rather
+            # than failing, so the run starts with the right picture.
+            return await schematic_summary(ctx)
         board_hash, index = await _working(ctx)
         drc = await asyncio.to_thread(svc.artifacts.drc, board_hash)
         evaluation = await _evaluate(ctx)
@@ -1164,6 +1204,33 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         payload = {"ok": True, "path": target.name, "parts": len(validated_parts), "nets": len(validated_nets)}
         if result.warnings:
             payload["warnings"] = result.warnings[:10]
+        # Report which parts JLCPCB actually stocks, so an unmakeable board is visible immediately.
+        try:
+            from kicad_harness.engine import parts as parts_mod
+
+            sourcing = []
+            for p in validated_parts:
+                if not p.value:
+                    continue
+                try:
+                    hit = parts_mod.search_jlc(p.value, limit=1)
+                except Exception:
+                    continue
+                match = (hit.get("parts") or [None])[0]
+                sourcing.append(
+                    {
+                        "ref": p.ref,
+                        "value": p.value,
+                        "jlc_stocked": bool(match),
+                        "lcsc": match["lcsc"] if match else None,
+                        "tier": match["tier"] if match else None,
+                    }
+                )
+            if sourcing:
+                payload["jlc_sourcing"] = sourcing
+                payload["unstocked"] = [s["value"] for s in sourcing if not s["jlc_stocked"]]
+        except Exception:
+            pass  # sourcing is advice; it must never block drawing the schematic
         return await _schematic_commit(ctx, "generate_schematic_skidl", f"Draw the schematic with skidl ({len(validated_parts)} parts)", payload)
 
     @agent.tool
@@ -1217,6 +1284,66 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         if ctx.deps.on_commit and version:
             ctx.deps.on_commit({"tool": "start_board_layout", **_version_brief(version)})
         return ToolReturn(return_value=payload, metadata=[_snapshot(ctx.deps.state)])
+
+    # ------------------------------------------------------------------ parts sourcing
+
+    @agent.tool
+    async def find_parts(
+        ctx: RunContext[HarnessDeps],
+        query: str | None = None,
+        package: str | None = None,
+        basic_only: bool = False,
+        limit: int = 15,
+    ) -> ToolReturn:
+        """Search the JLCPCB catalogue for parts that can actually be assembled (stock, price, basic vs extended)."""
+        from kicad_harness.engine import parts
+
+        try:
+            result = await asyncio.to_thread(
+                parts.search_jlc, query, package=package, basic_only=basic_only, limit=limit
+            )
+        except Exception as exc:
+            return ToolReturn(return_value={"ok": False, "error": _engine_error_text(exc)})
+        result["ok"] = True
+        return ToolReturn(return_value=result)
+
+    @agent.tool
+    async def check_part(ctx: RunContext[HarnessDeps], mpn: str, lcsc: str | None = None) -> ToolReturn:
+        """Check one part before using it: JLCPCB stock/price/tier, plus datasheet availability from i2cdb."""
+        from kicad_harness.engine import parts
+
+        try:
+            result = await asyncio.to_thread(parts.check_part, mpn, lcsc)
+        except Exception as exc:
+            return ToolReturn(return_value={"ok": False, "error": _engine_error_text(exc)})
+        result["ok"] = True
+        return ToolReturn(return_value=result)
+
+    @agent.tool
+    async def part_datasheet(
+        ctx: RunContext[HarnessDeps], mpn: str, manufacturer: str | None = None, pages: str | None = "1-6"
+    ) -> ToolReturn:
+        """Read a part's datasheet (markdown) to confirm pinout and ratings. Needs the manufacturer slug or MPN."""
+        from kicad_harness.engine import parts
+
+        try:
+            if not manufacturer:
+                hits = await asyncio.to_thread(parts.search_i2cdb, mpn, 10)
+                exact = next(
+                    (h for h in hits["parts"] if (h.get("mpn") or "").upper() == mpn.upper()), None
+                )
+                if not exact:
+                    return ToolReturn(return_value={
+                        "ok": False,
+                        "error": f"i2cdb has no record for {mpn!r}; near matches: "
+                                 f"{[h.get('mpn') for h in hits['parts'][:5]]}",
+                    })
+                manufacturer = exact["manufacturer"]
+            result = await asyncio.to_thread(parts.datasheet, manufacturer, mpn, pages)
+        except Exception as exc:
+            return ToolReturn(return_value={"ok": False, "error": _engine_error_text(exc)})
+        result["ok"] = bool(result.get("has_pdf"))
+        return ToolReturn(return_value=result)
 
     # ------------------------------------------------------------------ goal
 
