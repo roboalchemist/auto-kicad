@@ -1184,6 +1184,8 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         except ValueError as exc:
             raise ModelRetry(f"the netlist is invalid: {exc}") from exc
         target = ws.schematic_path
+        # Keep the current file so a refused generation can put it back untouched.
+        previous = target.read_bytes() if target.is_file() else None
         try:
             result = await asyncio.to_thread(
                 skidl_gen.generate, validated_parts, validated_nets, target,
@@ -1202,6 +1204,19 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
                 if options:
                     message += f" (symbols in {library} that match: {', '.join(options)})"
             return ToolReturn(return_value={"ok": False, "error": message})
+        # A netless run produces a sheet of unconnected symbols and discards existing wiring
+        # (this is how pi-relay lost 20 hand-drawn wires). Restore the previous file and say so.
+        if not validated_nets:
+            if previous is not None:
+                await asyncio.to_thread(target.write_bytes, previous)
+            return ToolReturn(return_value={
+                "ok": False,
+                "error": "no nets were given, so nothing would be connected — the schematic was left unchanged",
+                "hint": (
+                    "Pass a 'nets' list wiring the pins (e.g. {\"name\": \"GND\", \"pins\": "
+                    "[\"U1.1\", \"C1.2\"]}), or use connect_pins to wire specific pins."
+                ),
+            })
         payload = {"ok": True, "path": target.name, "parts": len(validated_parts), "nets": len(validated_nets)}
         if result.warnings:
             payload["warnings"] = result.warnings[:10]

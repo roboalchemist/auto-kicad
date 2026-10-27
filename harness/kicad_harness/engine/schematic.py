@@ -448,9 +448,14 @@ class Schematic:
             return None
         angle = math.radians(placement.rotation)
         cos, sin = math.cos(angle), math.sin(angle)
+        # Library symbol space has +y UP, but sheet coordinates have +y DOWN, so a pin's local
+        # y is negated before the placement offset is added. Getting this sign wrong puts the
+        # label on the opposite pin: verified against kicad-cli, where a label above a
+        # Device:R lands on pin 1 (library y = +3.81, sheet y = placement.y - 3.81).
+        px, py = pin.x, -pin.y
         return (
-            round(placement.x + pin.x * cos - pin.y * sin, 6),
-            round(placement.y + pin.x * sin + pin.y * cos, 6),
+            round(placement.x + px * cos - py * sin, 6),
+            round(placement.y + px * sin + py * cos, 6),
         )
 
     def pin_endpoint(self, placement: SymbolPlacement, number: str) -> tuple[float, float] | None:
@@ -825,16 +830,77 @@ class Schematic:
         if p1 is None or p2 is None:
             raise ValueError(f"unknown pin: {a if p1 is None else b}")
         name = net or f"{ref_a}.{pin_a}-{ref_b}.{pin_b}"
-        if abs(p1[1] - p2[1]) < 1e-6 or abs(p1[0] - p2[0]) < 1e-6:
-            self.add_wire([p1, p2])
-        else:
-            bend = (snap(p2[0]), snap(p1[1]))
-            self.add_wire([p1, bend])
-            self.add_wire([bend, p2])
-            self.add_junction(*bend)
+        self._route(p1, p2)
         self.add_label(name, p1[0], p1[1])
         self.add_label(name, p2[0], p2[1])
         return name
+
+    def _all_pin_points(self, exclude: set[tuple[float, float]]) -> set[tuple[float, float]]:
+        """Every pin anchor/end on the sheet except the two being connected.
+
+        A wire that passes through one of these would silently join that pin to the net —
+        KiCad connects at any shared point, including mid-wire — so routes must avoid them.
+        """
+        occupied: set[tuple[float, float]] = set()
+        for placement in self.placements():
+            symbol = self.lookup(placement.lib_id)
+            if symbol is None:
+                continue
+            for number in symbol.pins:
+                for point in self.pin_points(placement, number):
+                    key = NetNode(*point).key()
+                    if key not in exclude:
+                        occupied.add(key)
+        return occupied
+
+    def _segment_hits(self, a: tuple[float, float], b: tuple[float, float],
+                      occupied: set[tuple[float, float]]) -> bool:
+        """Whether the straight segment ``a``-``b`` passes through an occupied point."""
+        (x1, y1), (x2, y2) = a, b
+        for (px, py) in occupied:
+            within_x = min(x1, x2) - 1e-6 <= px <= max(x1, x2) + 1e-6
+            within_y = min(y1, y2) - 1e-6 <= py <= max(y1, y2) + 1e-6
+            if within_x and within_y:
+                return True
+        return False
+
+    def _route(self, p1: tuple[float, float], p2: tuple[float, float]) -> None:
+        """Draw a wire from ``p1`` to ``p2`` that does not run over any other pin.
+
+        Tries the direct line, then an L bend at either corner, then a Z jog in a free channel.
+        Every candidate is checked against all other pins first, because a wire crossing a pin
+        silently connects to it.
+        """
+        exclude = {NetNode(*p1).key(), NetNode(*p2).key()}
+        occupied = self._all_pin_points(exclude)
+
+        # Candidates in order of preference; the first clear one wins.
+        x1, y1 = p1
+        x2, y2 = p2
+        mid_y = snap((y1 + y2) / 2)
+        mid_x = snap((x1 + x2) / 2)
+        candidates = [
+            [(p1, p2)],
+            [(p1, (x2, y1)), ((x2, y1), p2)],
+            [(p1, (x1, y2)), ((x1, y2), p2)],
+            [(p1, (p1[0], mid_y)), ((p1[0], mid_y), (p2[0], mid_y)), ((p2[0], mid_y), p2)],
+            [(p1, (mid_x, p1[1])), ((mid_x, p1[1]), (mid_x, p2[1])), ((mid_x, p2[1]), p2)],
+        ]
+        chosen = candidates[0]
+        for option in candidates:
+            if not any(self._segment_hits(a, b, occupied) for a, b in option):
+                chosen = option
+                break
+
+        for a, b in chosen:
+            if NetNode(*a).key() == NetNode(*b).key():
+                continue
+            self.add_wire([a, b])
+        # Junctions only where the path genuinely turns.
+        for i in range(1, len(chosen)):
+            corner = chosen[i][0]
+            if NetNode(*corner).key() not in exclude:
+                self.add_junction(*corner)
 
     # -- internals -------------------------------------------------------------------------
 

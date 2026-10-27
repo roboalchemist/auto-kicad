@@ -230,3 +230,60 @@ async def test_unreadable_schematic_is_reported_not_raised(services, new_project
     assert isinstance(payload, dict) and payload.get("ok") is False
     assert "could not be read" in payload["error"]
     assert ws.phase() == "schematic"
+
+
+async def test_netless_regenerate_does_not_destroy_existing_wiring(services, new_project):
+    """A skidl run with no nets must leave hand-drawn wires alone (pi-relay lost 20 this way)."""
+    name, ws = new_project
+    from kicad_harness.engine.schematic import Schematic
+
+    script = Script(
+        [
+            [("add_symbol", {"symbol": "Device:R", "ref": "R1", "x": 100.0, "y": 100.0})],
+            [("add_symbol", {"symbol": "Device:R", "ref": "R2", "x": 130.0, "y": 100.0})],
+            [("connect_pins", {"a": "R1.2", "b": "R2.1", "net": "MID"})],
+            [
+                (
+                    "generate_schematic_skidl",
+                    {"parts": [{"ref": "R9", "library": "Device", "symbol": "R", "value": "1k"}], "nets": []},
+                )
+            ],
+            "done",
+        ]
+    )
+    agent = build_agent()
+    deps = deps_for(services, name)
+    with agent.override(model=script.model()):
+        await agent.run("wire then regenerate", deps=deps)
+
+    doc = Schematic.load(ws.schematic_path)
+    assert len(doc.wires) == 3, "the existing wires must survive a refused regeneration"
+    assert {"R1", "R2"} == {p.reference for p in doc.placements()}
+    assert "MID" in doc.nets()
+
+
+async def test_connect_pins_joins_the_pins_it_names(services, new_project):
+    """Regression: pin geometry had the Y axis inverted, so wires landed on the opposite pin."""
+    name, ws = new_project
+    script = Script(
+        [
+            [("add_symbol", {"symbol": "Device:R", "ref": "R1", "x": 100.0, "y": 100.0})],
+            [("add_symbol", {"symbol": "Device:R", "ref": "R2", "x": 130.0, "y": 100.0})],
+            [("connect_pins", {"a": "R1.2", "b": "R2.1", "net": "MID"})],
+            "done",
+        ]
+    )
+    agent = build_agent()
+    deps = deps_for(services, name)
+    with agent.override(model=script.model()):
+        await agent.run("wire", deps=deps)
+
+    from kicad_harness.engine import kicad_cli
+
+    netlist = kicad_cli.parse_netlist(
+        kicad_cli.export_netlist(ws.schematic_path, ws.path / "n.net").read_text()
+    )
+    # KiCad prefixes local nets with the sheet path ("/MID").
+    mid = next((nodes for name, nodes in netlist["nets"].items() if name.lstrip("/") == "MID"), [])
+    members = {(ref, pin) for ref, pin in mid}
+    assert members == {("R1", "2"), ("R2", "1")}, netlist["nets"]
