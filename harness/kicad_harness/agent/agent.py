@@ -1015,9 +1015,25 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         """The schematic: paper size, every symbol (ref, value, footprint, position), nets, floating pins and ERC counts."""
         svc = ctx.deps.services
         ws = _ws(ctx)
-        doc = await asyncio.to_thread(_schematic, ctx)
-        index = doc.index()
         from kicad_harness.engine import kicad_cli
+
+        try:
+            doc = await asyncio.to_thread(_schematic, ctx)
+            index = doc.index()
+        except Exception as exc:
+            # A half-written or unparseable schematic is a state to report, not a crash: raising
+            # here would burn the tool-retry budget and end the whole run.
+            return ToolReturn(
+                return_value={
+                    "ok": False,
+                    "error": f"the schematic could not be read: {exc}",
+                    "hint": "It may be mid-write. Call schematic_summary again, or regenerate the "
+                    "schematic with generate_schematic_skidl.",
+                    "phase": ws.phase(),
+                    "brief": ws.brief(),
+                },
+                metadata=[_snapshot(ctx.deps.state)],
+            )
 
         try:
             report = await asyncio.to_thread(kicad_cli.erc, ws.schematic_path, config=svc.config)

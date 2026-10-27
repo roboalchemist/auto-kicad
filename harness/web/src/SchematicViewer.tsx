@@ -9,14 +9,15 @@ import { useEffect, useState } from "react";
 import { api } from "./api.ts";
 import type { SchematicInfo } from "./types.ts";
 
-export function SchematicViewer({ design, rev }: { design: string; rev: string }) {
+export function SchematicViewer({ design, rev, version }: { design: string; rev: string; version?: string | null }) {
   const [info, setInfo] = useState<SchematicInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [svgKey, setSvgKey] = useState(0);
 
+  // `version` is the design's schematic content hash. It changes on every accepted edit, so the
+  // sheet, netlist and ERC refresh live while the agent draws — not only when the tab is opened.
   useEffect(() => {
     let live = true;
-    setInfo(null);
     setError(null);
     api
       .schematic(design)
@@ -25,7 +26,7 @@ export function SchematicViewer({ design, rev }: { design: string; rev: string }
     return () => {
       live = false;
     };
-  }, [design, rev, svgKey]);
+  }, [design, rev, version, svgKey]);
 
   const errors = info?.erc?.counts?.errors;
   const warnings = info?.erc?.counts?.warnings;
@@ -64,8 +65,10 @@ export function SchematicViewer({ design, rev }: { design: string; rev: string }
 
       <div className="schematic-sheet">
         <img
-          key={svgKey}
-          src={api.schematicSvgUrl(design, rev)}
+          /* Keyed by content hash so each edit re-fetches the plot; `?v=` busts the browser
+             cache for a URL that would otherwise be identical. */
+          key={`${svgKey}-${version ?? ""}`}
+          src={api.schematicSvgUrl(design, rev, 0, version)}
           alt="schematic"
           data-testid="schematic-svg"
           onError={() => setError("the schematic could not be plotted")}

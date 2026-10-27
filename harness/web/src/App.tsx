@@ -247,7 +247,11 @@ function Harness({ threadId, errors }: { threadId: string; errors: string[] }) {
       <div className="harness-body">
         <section className="board-panel">
           {phase === "schematic" && h.designName ? (
-            <SchematicViewer design={h.designName} rev={h.rev} />
+            <SchematicViewer
+              design={h.designName}
+              rev={h.rev}
+              version={h.design?.schematic_hash ?? null}
+            />
           ) : (
             <BoardViewer onOpenThread={() => setTab("review")} />
           )}

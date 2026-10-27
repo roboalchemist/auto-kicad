@@ -209,3 +209,24 @@ async def test_skidl_failure_returns_a_readable_error(services, new_project):
     assert "Unable to find part" in message
     assert "NE555P" in message  # the suggestion the model needs to fix it
     assert ws.phase() == "schematic"
+
+
+async def test_unreadable_schematic_is_reported_not_raised(services, new_project):
+    """A half-written schematic must come back as data, not exhaust the tool-retry budget."""
+    name, ws = new_project
+    ws.schematic_path.write_text("(kicad_sch (version 20250114)", encoding="utf-8")  # truncated
+    script = Script([[("schematic_summary", {})], "done"])
+    agent = build_agent()
+    deps = deps_for(services, name)
+    with agent.override(model=script.model()):
+        result = await agent.run("look", deps=deps)
+    assert result.output == "done"
+
+    returns = [
+        p for m in result.all_messages() for p in getattr(m, "parts", []) if type(p).__name__ == "ToolReturnPart"
+    ]
+    assert returns, "the tool should have returned"
+    payload = returns[0].content
+    assert isinstance(payload, dict) and payload.get("ok") is False
+    assert "could not be read" in payload["error"]
+    assert ws.phase() == "schematic"

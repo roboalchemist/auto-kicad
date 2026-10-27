@@ -52,8 +52,9 @@ export const api = {
       body,
     ),
   schematic: (d: string) => get<SchematicInfo>(`/api/designs/${d}/schematic`),
-  schematicSvgUrl: (d: string, rev = "working", sheet = 0) =>
-    `/api/designs/${d}/schematic.svg?rev=${encodeURIComponent(rev)}&sheet=${sheet}`,
+  schematicSvgUrl: (d: string, rev = "working", sheet = 0, version?: string | null) =>
+    `/api/designs/${d}/schematic.svg?rev=${encodeURIComponent(rev)}&sheet=${sheet}` +
+    (version ? `&v=${encodeURIComponent(version)}` : ""),
   models: () => get<ModelsResponse>("/api/models"),
   stopRun: (d: string) => send<{ stopping: boolean }>(`/api/designs/${d}/stop`, "POST", {}),
   setModel: (model: string) => send<{ current: string }>("/api/models", "PUT", { model }),
