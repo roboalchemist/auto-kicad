@@ -29,6 +29,9 @@ CRITERIA: dict[str, tuple[tuple[str, ...], str]] = {
     "min_distance": (("a", "b", "min_mm"), "{a} at least {min_mm} mm from {b}"),
     "within_region": (("ref", "region"), "{ref} entirely inside region {region}"),
     "open_threads": (("max",), "open review threads ({severity_text}) <= {max}"),
+    "erc_errors": (("max",), "ERC errors <= {max}"),
+    "erc_warnings": (("max",), "ERC warnings <= {max}"),
+    "board_laid_out": (("min",), "board laid out from the schematic"),
 }
 
 Measure = Callable[[dict, str, str], dict]
@@ -172,6 +175,16 @@ def evaluate_criterion(
                 result.update(value=[round(bx, 3), round(by, 3), round(bx + bw, 3), round(by + bh, 3)], passed=ok,
                               detail=f"{c['ref']} spans ({bx:.2f}, {by:.2f})-({bx + bw:.2f}, {by + bh:.2f}); "
                                      f"region ({x1}, {y1})-({x2}, {y2})")
+        elif ctype in ("erc_errors", "erc_warnings"):
+            # ERC comes from the schematic; the caller passes it as drc= with an "erc" marker.
+            erc_counts = (drc or {}).get("erc_counts", {})
+            key = "errors" if ctype == "erc_errors" else "warnings"
+            value = int(erc_counts.get(key, 0))
+            result.update(value=value, passed=value <= c["max"], detail=f"{value} ERC {key} (max {c['max']})")
+        elif ctype == "board_laid_out":
+            laid_out = 1 if (drc or {}).get("board_laid_out") else 0
+            result.update(value=laid_out, passed=laid_out >= int(c.get("min", 1)),
+                          detail="board laid out from the schematic" if laid_out else "no board yet")
         elif ctype == "open_threads":
             severities = set(c.get("severities") or [])
             open_threads = [

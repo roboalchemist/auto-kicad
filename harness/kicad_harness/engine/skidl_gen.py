@@ -1,0 +1,237 @@
+"""Generate a schematic from a netlist description with skidl. See DESIGN.md, "Schematic".
+
+Two engines can produce ``schematic.kicad_sch``:
+
+- ``engine/schematic.py`` — the agent places symbols and wires them itself. Precise, and the
+  file is exactly what the agent drew.
+- this module — the agent (or a user) describes parts and nets, and skidl lays the circuit out
+  and writes the file. Faster for a whole board idea, and it does the plumbing.
+
+Both end at the same place: a ``.kicad_sch`` that ``kicad-cli`` renders and ERCs
+(``engine/kicad_cli.py``).
+
+skidl imports KiCad's libraries from ``KICAD<n>_SYMBOL_DIR``/``KICAD<n>_FOOTPRINT_DIR`` at
+import time, so those are set by ``_env()`` before the package is imported. skidl also always
+writes ``schematic.kicad_sch`` into the current directory and drops ``skidl.log``,
+``skidl.erc`` and ``schematic-erc.rpt`` beside it, so generation runs in a scratch directory
+and the single file we want is moved into place.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from .client import EngineError
+
+SCHEMATIC_NAME = "schematic.kicad_sch"
+
+
+@dataclass
+class PartSpec:
+    """One component: a KiCad symbol and the footprint the board phase should place."""
+
+    ref: str
+    library: str
+    symbol: str
+    value: str = ""
+    footprint: str = ""
+
+
+@dataclass
+class NetSpec:
+    """A net and the pins on it, as ``("R1", "1")`` pairs."""
+
+    name: str
+    pins: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass
+class GenerationResult:
+    """What a generation produced: the schematic path, and what skidl complained about."""
+
+    path: Path
+    log: str = ""
+    warnings: list[str] = field(default_factory=list)
+
+
+def available() -> bool:
+    """Whether skidl can be imported with the current interpreter."""
+    try:
+        import skidl  # noqa: F401
+    except Exception:  # pragma: no cover - depends on the install
+        return False
+    return True
+
+
+def validate(spec: dict[str, Any]) -> tuple[list[PartSpec], list[NetSpec]]:
+    """Check a spec from the agent and return ``(parts, nets)``.
+
+    The spec is ``{"parts": [...], "nets": [...]}``; see ``PartSpec``/``NetSpec``. Raises
+    ``ValueError`` naming the first problem, because the agent reads these messages.
+    """
+    if not isinstance(spec, dict):
+        raise ValueError("spec must be an object with 'parts' and 'nets'")
+    raw_parts = spec.get("parts")
+    if not isinstance(raw_parts, list) or not raw_parts:
+        raise ValueError("spec needs a non-empty 'parts' list")
+    parts: list[PartSpec] = []
+    seen: set[str] = set()
+    for i, raw in enumerate(raw_parts):
+        if not isinstance(raw, dict):
+            raise ValueError(f"parts[{i}] must be an object")
+        ref = str(raw.get("ref", "")).strip()
+        library = str(raw.get("library", "")).strip()
+        symbol = str(raw.get("symbol", "")).strip()
+        if not ref or not library or not symbol:
+            raise ValueError(f"parts[{i}] needs ref, library and symbol")
+        if ref in seen:
+            raise ValueError(f"duplicate reference {ref!r}")
+        seen.add(ref)
+        parts.append(
+            PartSpec(
+                ref=ref,
+                library=library,
+                symbol=symbol,
+                value=str(raw.get("value", "") or ""),
+                footprint=str(raw.get("footprint", "") or ""),
+            )
+        )
+
+    raw_nets = spec.get("nets", [])
+    if not isinstance(raw_nets, list):
+        raise ValueError("'nets' must be a list")
+    known = {p.ref for p in parts}
+    nets: list[NetSpec] = []
+    for i, raw in enumerate(raw_nets):
+        if not isinstance(raw, dict):
+            raise ValueError(f"nets[{i}] must be an object")
+        name = str(raw.get("name", "")).strip()
+        if not name:
+            raise ValueError(f"nets[{i}] needs a name")
+        pins: list[tuple[str, str]] = []
+        for pin in raw.get("pins", []):
+            text = str(pin)
+            if "." not in text:
+                raise ValueError(f"nets[{i}].pins: {text!r} should be 'REF.PIN', e.g. 'R1.2'")
+            ref, number = text.rsplit(".", 1)
+            if ref not in known:
+                raise ValueError(f"net {name!r} refers to unknown part {ref!r}")
+            pins.append((ref, number))
+        nets.append(NetSpec(name=name, pins=pins))
+    return parts, nets
+
+
+def generate(
+    parts: list[PartSpec],
+    nets: list[NetSpec],
+    out: str | Path,
+    *,
+    symbol_dirs: list[Path] | None = None,
+    footprint_dirs: list[Path] | None = None,
+    timeout: float = 180,
+) -> GenerationResult:
+    """Write a schematic for ``parts``/``nets`` to ``out`` using skidl.
+
+    Runs in a subprocess so skidl's import-time environment and global state can't leak into
+    the harness process. Raises ``EngineError("SchematicGeneration")`` when skidl fails.
+    """
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if shutil.which(sys.executable) is None:
+        raise EngineError("SchematicGeneration", f"no python interpreter at {sys.executable}")
+
+    payload = {
+        "parts": [p.__dict__ for p in parts],
+        "nets": [n.__dict__ for n in nets],
+    }
+    env = _env(symbol_dirs, footprint_dirs)
+    with tempfile.TemporaryDirectory(prefix="harness-skidl-") as tmp:
+        tmpdir = Path(tmp)
+        script = tmpdir / "generate.py"
+        script.write_text(_SCRIPT, encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(script)],
+            cwd=str(tmpdir),
+            env=env,
+            input=_json(payload),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        produced = tmpdir / SCHEMATIC_NAME
+        log_path = tmpdir / "skidl.log"
+        log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+        if proc.returncode != 0 or not produced.is_file():
+            detail = (proc.stderr or proc.stdout or "").strip().splitlines()[-8:]
+            raise EngineError(
+                "SchematicGeneration",
+                "skidl could not generate the schematic: " + (" | ".join(detail) or "no output"),
+            )
+        tmp_out = out.with_suffix(out.suffix + ".tmp")
+        shutil.copyfile(produced, tmp_out)
+        tmp_out.replace(out)
+    warnings = [line for line in log.splitlines() if "WARNING" in line or "ERROR" in line]
+    return GenerationResult(path=out, log=log, warnings=warnings)
+
+
+def _env(symbol_dirs: list[Path] | None, footprint_dirs: list[Path] | None) -> dict[str, str]:
+    env = dict(os.environ)
+    symbols = [p for p in (symbol_dirs or _default_symbol_dirs()) if Path(p).is_dir()]
+    footprints = [p for p in (footprint_dirs or []) if Path(p).is_dir()]
+    for version in (6, 7, 8, 9, 10):
+        if symbols:
+            env[f"KICAD{version}_SYMBOL_DIR"] = str(symbols[0])
+        if footprints:
+            env[f"KICAD{version}_FOOTPRINT_DIR"] = str(footprints[0])
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    return env
+
+
+def _default_symbol_dirs() -> list[Path]:
+    """Where KiCad keeps its symbol library, for the usual Linux and macOS installs."""
+    return [
+        Path("/usr/share/kicad/symbols"),
+        Path("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols"),
+    ]
+
+
+def _json(payload: Any) -> str:
+    import json
+
+    return json.dumps(payload)
+
+
+# Runs as its own process; reads a JSON spec on stdin and writes schematic.kicad_sch in cwd.
+_SCRIPT = r'''
+import json
+import sys
+
+spec = json.load(sys.stdin)
+from skidl import KICAD10, Net, Part, generate_schematic  # noqa: E402
+
+parts = {}
+for item in spec["parts"]:
+    kwargs = {}
+    if item.get("value"):
+        kwargs["value"] = item["value"]
+    if item.get("footprint"):
+        kwargs["footprint"] = item["footprint"]
+    parts[item["ref"]] = Part(item["library"], item["symbol"], **kwargs)
+
+nets = {}
+for item in spec["nets"]:
+    net = Net(item["name"])
+    for ref, pin in item["pins"]:
+        part = parts[ref]
+        net += part[int(pin)] if pin.isdigit() else part[pin]
+
+generate_schematic(tool=KICAD10)
+sys.exit(0)
+'''

@@ -131,6 +131,81 @@ def drc(board: str | os.PathLike[str], *, config: Config | None = None, timeout:
     return normalize_drc(raw)
 
 
+# ----------------------------------------------------------------------------------- ERC (schematic)
+
+
+def _erc_item(item: dict[str, Any]) -> dict[str, Any]:
+    """One ERC violation, reduced to the fields the agent and the UI need."""
+    return {
+        "type": str(item.get("type", "")),
+        "severity": str(item.get("severity", "")),
+        "description": str(item.get("description", "")),
+        "items": [
+            {
+                "description": str(i.get("description", "")),
+                "pos": [round(float(i["pos"]["x"]), 3), round(float(i["pos"]["y"]), 3)]
+                if isinstance(i.get("pos"), dict) and "x" in i["pos"] and "y" in i["pos"]
+                else None,
+            }
+            for i in item.get("items", [])
+            if isinstance(i, dict)
+        ],
+    }
+
+
+def normalize_erc(raw: dict[str, Any]) -> dict[str, Any]:
+    """Turn kicad-cli's ERC JSON into ``{counts, violations}``.
+
+    ``counts.errors``/``warnings`` come from the sheets' violation lists, which is the only
+    place kicad-cli records them.
+    """
+    violations: list[dict[str, Any]] = []
+    for sheet in raw.get("sheets", []):
+        for item in sheet.get("violations", []):
+            violations.append(_erc_item(item))
+    if not violations:
+        violations = [_erc_item(v) for v in raw.get("violations", [])]
+    return {
+        "counts": {
+            "errors": sum(1 for v in violations if v["severity"] == "error"),
+            "warnings": sum(1 for v in violations if v["severity"] == "warning"),
+        },
+        "violations": violations,
+    }
+
+
+def erc(schematic: str | os.PathLike[str], *, config: Config | None = None,
+        timeout: float = 300) -> dict[str, Any]:
+    """Run ``kicad-cli sch erc --format json --severity-all`` and normalize the report."""
+    path = _schematic_path(schematic)
+    with tempfile.TemporaryDirectory(prefix="harness-erc-") as tmp:
+        out = Path(tmp) / "erc.json"
+        run(["sch", "erc", "--format", "json", "--units", "mm", "--severity-all", "-o", str(out), str(path)],
+            config=config, timeout=timeout)
+        try:
+            raw = json.loads(out.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise EngineError("KiCadCliError", f"kicad-cli wrote no readable ERC report: {exc}") from exc
+    return normalize_erc(raw)
+
+
+def export_sch_svg(schematic: str | os.PathLike[str], out_dir: str | os.PathLike[str], *,
+                   config: Config | None = None, timeout: float = 300) -> list[Path]:
+    """Plot every sheet of a schematic to SVG in ``out_dir``; returns the files, first sheet first."""
+    path = _schematic_path(schematic)
+    target = Path(out_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    run(["sch", "export", "svg", "-o", str(target), str(path)], config=config, timeout=timeout)
+    return sorted(target.glob("*.svg"))
+
+
+def _schematic_path(schematic: str | os.PathLike[str]) -> Path:
+    path = Path(schematic).expanduser().resolve()
+    if not path.is_file():
+        raise EngineError("NotFound", f"Schematic file not found: {path}")
+    return path
+
+
 # ----------------------------------------------------------------------------------- SVG
 
 

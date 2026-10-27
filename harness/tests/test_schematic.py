@@ -241,3 +241,80 @@ def test_kicad_renders_and_erc_passes(tmp_path: Path, libraries, ids) -> None:
     report = json.loads(erc_path.read_text(encoding="utf-8"))
     errors = [v for v in report.get("violations", []) if v.get("severity") == "error"]
     assert not errors, errors
+
+
+# ---------------------------------------------------------------------------------------------
+# skidl generator
+
+
+def test_skidl_spec_validation() -> None:
+    from kicad_harness.engine import skidl_gen
+
+    parts, nets = skidl_gen.validate(
+        {
+            "parts": [
+                {"ref": "R1", "library": "Device", "symbol": "R", "value": "10k"},
+                {"ref": "C1", "library": "Device", "symbol": "C"},
+            ],
+            "nets": [{"name": "MID", "pins": ["R1.2", "C1.1"]}],
+        }
+    )
+    assert [p.ref for p in parts] == ["R1", "C1"]
+    assert nets[0].pins == [("R1", "2"), ("C1", "1")]
+
+    with pytest.raises(ValueError, match="unknown part"):
+        skidl_gen.validate(
+            {"parts": [{"ref": "R1", "library": "Device", "symbol": "R"}], "nets": [{"name": "X", "pins": ["R9.1"]}]}
+        )
+    with pytest.raises(ValueError, match="REF.PIN"):
+        skidl_gen.validate(
+            {"parts": [{"ref": "R1", "library": "Device", "symbol": "R"}], "nets": [{"name": "X", "pins": ["R1"]}]}
+        )
+    with pytest.raises(ValueError, match="duplicate reference"):
+        skidl_gen.validate(
+            {
+                "parts": [
+                    {"ref": "R1", "library": "Device", "symbol": "R"},
+                    {"ref": "R1", "library": "Device", "symbol": "R"},
+                ]
+            }
+        )
+
+
+def test_skidl_generates_a_loadable_schematic(tmp_path: Path) -> None:
+    """skidl output must land as schematic.kicad_sch and be loadable by KiCad."""
+    from kicad_harness.engine import skidl_gen
+
+    if not skidl_gen.available():
+        pytest.skip("skidl is not installed")
+    if not skidl_gen._default_symbol_dirs()[0].is_dir() and not (
+        Path("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols").is_dir()
+    ):
+        pytest.skip("no KiCad symbol library on this machine")
+
+    parts = [
+        skidl_gen.PartSpec("R1", "Device", "R", value="10k", footprint="Resistor_SMD:R_0805_2012Metric"),
+        skidl_gen.PartSpec("C1", "Device", "C", value="100n", footprint="Capacitor_SMD:C_0805_2012Metric"),
+    ]
+    nets = [
+        skidl_gen.NetSpec("VCC", [("R1", "1")]),
+        skidl_gen.NetSpec("MID", [("R1", "2"), ("C1", "1")]),
+        skidl_gen.NetSpec("GND", [("C1", "2")]),
+    ]
+    out = tmp_path / "schematic.kicad_sch"
+    result = skidl_gen.generate(parts, nets, out)
+    assert result.path.is_file() and result.path.stat().st_size > 0
+
+    loaded = sch.Schematic.load(out)
+    refs = {p.reference for p in loaded.placements() if not p.reference.startswith("#")}
+    assert refs == {"R1", "C1"}
+
+    cli = _kicad_cli(tmp_path)
+    if not cli:
+        return
+    svg = subprocess.run(
+        [cli, "sch", "export", "svg", str(out), "-o", str(tmp_path / "svg")],
+        capture_output=True,
+        text=True,
+    )
+    assert svg.returncode == 0, svg.stdout + svg.stderr

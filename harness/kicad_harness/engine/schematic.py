@@ -338,12 +338,36 @@ class Schematic:
 
     @classmethod
     def load(cls, path: str | Path, libraries: dict[str, dict[str, LibrarySymbol]] | None = None) -> "Schematic":
-        """Read ``path``; raises ``FileNotFoundError`` if there is no schematic."""
+        """Read ``path``; raises ``FileNotFoundError`` if there is no schematic.
+
+        With no ``libraries``, symbols resolve out of the file's own ``lib_symbols`` block, which
+        is what a schematic written by skidl or eeschema carries. Extra libraries passed in are
+        searched first.
+        """
         path = Path(path)
         if not path.is_file():
             raise FileNotFoundError(f"no schematic at {path}")
         tree = parse(path.read_text(encoding="utf-8"))
-        return cls(path=path, tree=tree, libraries=libraries or {})
+        doc = cls(path=path, tree=tree, libraries=dict(libraries or {}))
+        doc._load_embedded()
+        return doc
+
+    def _load_embedded(self) -> None:
+        """Register the file's ``lib_symbols`` under the library name they are addressed by."""
+        block = find_one(self.tree, "lib_symbols")
+        if block is None:
+            return
+        for node in find_all(block, "symbol"):
+            if len(node) < 2:
+                continue
+            full = _clean(node[1])
+            if ":" not in full:
+                continue
+            lib, name = full.split(":", 1)
+            table = self.libraries.setdefault(lib, {})
+            if name in table:
+                continue
+            table[name] = _embedded_symbol(full, node)
 
     @classmethod
     def create(
@@ -427,25 +451,53 @@ class Schematic:
             round(placement.y + pin.x * sin + pin.y * cos, 6),
         )
 
-    def pin_net(self, placement: SymbolPlacement, number: str) -> str | None:
-        """Net attached to a pin: from its adjacent label, or ``None`` if it floats."""
-        position = self.pin_position(placement, number)
-        if position is None:
+    def pin_endpoint(self, placement: SymbolPlacement, number: str) -> tuple[float, float] | None:
+        """Absolute position of a pin's *outer* end (anchor plus the pin's own length).
+
+        KiCad connects at the anchor, but generators such as skidl draw wires to this point, so
+        connectivity considers both.
+        """
+        symbol = self.lookup(placement.lib_id)
+        if symbol is None:
             return None
-        key = NetNode(*position).key()
+        pin = symbol.pins.get(_clean(number))
+        anchor = self.pin_position(placement, number)
+        if pin is None or anchor is None:
+            return None
+        angle = math.radians(placement.rotation + pin.angle)
+        return (
+            round(anchor[0] + pin.length * math.cos(angle), 6),
+            round(anchor[1] - pin.length * math.sin(angle), 6),
+        )
+
+    def pin_points(self, placement: SymbolPlacement, number: str) -> list[tuple[float, float]]:
+        """Where a pin can connect: its anchor, and the outer end generators draw wires to."""
+        points = []
+        anchor = self.pin_position(placement, number)
+        if anchor is not None:
+            points.append(anchor)
+        end = self.pin_endpoint(placement, number)
+        if end is not None and end != anchor:
+            points.append(end)
+        return points
+
+    def pin_net(self, placement: SymbolPlacement, number: str) -> str | None:
+        """Net attached to a pin: from a label at one of its points, or a wire that reaches it."""
+        keys = {NetNode(*p).key() for p in self.pin_points(placement, number)}
+        if not keys:
+            return None
         for label in find_all(self.tree, "label") + find_all(self.tree, "global_label"):
             at = find_one(label, "at")
             if not at or len(at) < 3:
                 continue
-            if NetNode(float(at[1]), float(at[2])).key() == key:
+            if NetNode(float(at[1]), float(at[2])).key() in keys:
                 return _clean(label[1]) if len(label) > 1 else None
         for wire in self.wires:
             pts = find_one(wire, "pts")
             if not pts:
                 continue
-            xy = find_all(pts, "xy")
-            ends = {NetNode(float(p[1]), float(p[2])).key() for p in xy if len(p) > 2}
-            if key in ends:
+            ends = {NetNode(float(p[1]), float(p[2])).key() for p in find_all(pts, "xy") if len(p) > 2}
+            if keys & ends:
                 return self.wire_net(wire)
         return None
 
@@ -461,20 +513,95 @@ class Schematic:
                 return _clean(label[1]) if len(label) > 1 else None
         return None
 
-    def nets(self) -> dict[str, list[dict[str, Any]]]:
-        """``{net: [{ref, pin, name}]}`` for every labelled connection on the sheet."""
-        out: dict[str, list[dict[str, Any]]] = {}
+    def build_connectivity(self) -> dict[str, list[dict[str, Any]]]:
+        """Nets found by *geometry*: pins, wire endpoints and wire-junction points that meet.
+
+        This is the general case, and what a schematic written by skidl or by hand needs:
+        pins that sit on a wire endpoint join that wire's net, wires that share a point join
+        each other, and a label anywhere on a point names the net. The net's name comes from
+        the labels on its points, or ``Net-<n>`` when it has none.
+        """
+        parent: dict[tuple[float, float], tuple[float, float]] = {}
+
+        def find(point: tuple[float, float]) -> tuple[float, float]:
+            parent.setdefault(point, point)
+            while parent[point] != point:
+                parent[point] = parent[parent[point]]
+                point = parent[point]
+            return point
+
+        def union(a: tuple[float, float], b: tuple[float, float]) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        for wire in self.wires:
+            pts = find_one(wire, "pts")
+            if not pts:
+                continue
+            ends = [NetNode(float(p[1]), float(p[2])).key() for p in find_all(pts, "xy") if len(p) > 2]
+            for point in ends:
+                find(point)
+            for a, b in zip(ends, ends[1:]):
+                union(a, b)
+
+        labels: dict[tuple[float, float], str] = {}
+        for label in find_all(self.tree, "label") + find_all(self.tree, "global_label"):
+            at = find_one(label, "at")
+            if not at or len(at) < 3:
+                continue
+            point = NetNode(float(at[1]), float(at[2])).key()
+            labels[point] = _clean(label[1])
+            find(point)
+
+        pin_nodes: list[tuple[tuple[float, float], str, str, str]] = []
         for placement in self.placements():
             symbol = self.lookup(placement.lib_id)
-            if symbol is None:
+            if symbol is None or placement.reference.startswith("#"):
                 continue
             for number, pin in symbol.pins.items():
-                net = self.pin_net(placement, number)
-                if net:
-                    out.setdefault(net, []).append(
-                        {"ref": placement.reference, "pin": number, "name": pin.name}
-                    )
-        return out
+                points = self.pin_points(placement, number)
+                if not points:
+                    continue
+                entry = (placement.reference, number, pin.name)
+                for position in points:
+                    point = NetNode(*position).key()
+                    pin_nodes.append((point, *entry))
+                    find(point)
+                # A pin's own points are always connected to each other.
+                for a, b in zip(points, points[1:]):
+                    union(NetNode(*a).key(), NetNode(*b).key())
+
+        groups: dict[tuple[float, float], list[dict[str, Any]]] = {}
+        for point, ref, number, name in pin_nodes:
+            members = groups.setdefault(find(point), [])
+            entry = {"ref": ref, "pin": number, "name": name}
+            if entry not in members:
+                members.append(entry)
+
+        names: dict[tuple[float, float], str] = {}
+        for point, name in labels.items():
+            names.setdefault(find(point), name)
+
+        out: dict[str, list[dict[str, Any]]] = {}
+        unnamed = 0
+        for root, members in groups.items():
+            if len(members) < 2 and root not in names:
+                continue
+            name = names.get(root)
+            if not name:
+                unnamed += 1
+                name = f"Net-({root[0]:g},{root[1]:g})"
+            out.setdefault(name, []).extend(members)
+        return dict(sorted(out.items()))
+
+    def nets(self) -> dict[str, list[dict[str, Any]]]:
+        """``{net: [{ref, pin, name}]}`` for every connection on the sheet.
+
+        Uses geometry (``build_connectivity``), so it sees skidl's drawn wires as well as
+        labels.
+        """
+        return self.build_connectivity()
 
     def index(self) -> dict[str, Any]:
         """A compact description of the sheet, for the agent and the UI."""
@@ -726,6 +853,48 @@ class Schematic:
                 return
         body = _rename_symbol(symbol.body, full_name)
         lib_block.append(body)
+
+
+def _embedded_symbol(full_name: str, node: list) -> LibrarySymbol:
+    """A ``LibrarySymbol`` built from a ``lib_symbols`` entry inside a schematic file."""
+    pins: dict[str, LibraryPin] = {}
+    reference, value, footprint = "U", full_name.split(":", 1)[-1], ""
+    for prop in find_all(node, "property"):
+        key = _clean(prop[1]) if len(prop) > 1 else ""
+        val = _clean(prop[2]) if len(prop) > 2 else ""
+        if key == "Reference":
+            reference = val or "U"
+        elif key == "Value":
+            value = val or value
+        elif key == "Footprint":
+            footprint = val
+    for unit in find_all(node, "symbol"):
+        for pin in find_all(unit, "pin"):
+            at = find_one(pin, "at") or ["at", "0", "0", "0"]
+            number_node = find_one(pin, "number")
+            name_node = find_one(pin, "name")
+            length_node = find_one(pin, "length")
+            number = _clean(number_node[1]) if number_node and len(number_node) > 1 else ""
+            if not number:
+                continue
+            pins[number] = LibraryPin(
+                number=number,
+                name=_clean(name_node[1]) if name_node and len(name_node) > 1 else number,
+                x=float(at[1]) if len(at) > 1 else 0.0,
+                y=float(at[2]) if len(at) > 2 else 0.0,
+                angle=float(at[3]) if len(at) > 3 else 0.0,
+                length=float(length_node[1]) if length_node and len(length_node) > 1 else 2.54,
+                electrical=_clean(pin[1]) if len(pin) > 1 else "unspecified",
+            )
+    return LibrarySymbol(
+        name=full_name.split(":", 1)[-1],
+        lib_id=full_name,
+        pins=pins,
+        reference=reference,
+        value=value,
+        footprint=footprint,
+        body=node,
+    )
 
 
 def _instance_property(name: str, value: str, x: float, y: float, hidden: bool = False) -> list:
