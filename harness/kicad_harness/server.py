@@ -808,8 +808,21 @@ def create_app() -> FastAPI:
 
     @app.get("/api/designs/{design}/goal/status")
     async def goal_status(request: Request, design: str, rev: str = "working"):
+        from kicad_harness.engine import kicad_cli
+
         svc = _svc(request)
         ws = _workspace(svc, design)
+        if ws.phase() == "schematic":
+            # Judge the schematic: ERC counts plus whether a board exists yet.
+            try:
+                report = await asyncio.to_thread(kicad_cli.erc, ws.schematic_path, config=svc.config)
+                erc_counts = report["counts"]
+            except Exception:
+                erc_counts = {"errors": 1, "warnings": 0}
+            return goals.evaluate(
+                ws.goal(), {}, {"erc_counts": erc_counts, "board_laid_out": ws.board_path.is_file()},
+                svc.store.review.list(design),
+            )
         board_hash = await _rev_hash(svc, ws, rev)
         index = await asyncio.to_thread(svc.artifacts.index, board_hash)
         drc = await asyncio.to_thread(svc.artifacts.drc, board_hash)
@@ -866,9 +879,15 @@ def create_app() -> FastAPI:
         ws = _workspace(svc, design)
 
         def probe() -> dict:
-            st = ws.board_path.stat()
+            # Before a board exists, watch the schematic instead so the UI still refreshes.
+            watched = ws.board_path if ws.phase() == "board" else ws.schematic_path
+            try:
+                st = watched.stat()
+                board = (st.st_mtime_ns, st.st_size)
+            except FileNotFoundError:
+                board = None
             return {
-                "board": (st.st_mtime_ns, st.st_size),
+                "board": board,
                 "version": (ws.head(), ws.branch()),
                 "threads": svc.store.review.last_updated(design),
                 "runs": svc.store.runs.last_updated(design),
@@ -887,7 +906,8 @@ def create_app() -> FastAPI:
                     if now["version"] != last["version"]:
                         yield f"data: {json.dumps({'type': 'version', 'head': now['version'][0], 'branch': now['version'][1]})}\n\n"
                     if now["board"] != last["board"]:
-                        yield f"data: {json.dumps({'type': 'board', 'mtime': now['board'][0]})}\n\n"
+                        mtime = now["board"][0] if now["board"] else None
+                        yield f"data: {json.dumps({'type': 'board', 'mtime': mtime})}\n\n"
                     if now["threads"] != last["threads"]:
                         yield f"data: {json.dumps({'type': 'threads'})}\n\n"
                     if now["runs"] != last["runs"]:
