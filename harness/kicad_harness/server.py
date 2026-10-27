@@ -639,6 +639,10 @@ def create_app() -> FastAPI:
     @app.get("/api/designs/{design}/rev/{rev}/index")
     async def rev_index(request: Request, design: str, rev: str):
         svc = _svc(request)
+        if _workspace(svc, design).phase() == "schematic":
+            # No board to index yet; the viewer uses the schematic endpoints instead.
+            return {"board_hash": None, "phase": "schematic", "board": None, "footprints": [],
+                    "pads": [], "tracks": [], "vias": [], "zones": [], "nets": []}
         board_hash = await _rev_hash(svc, _workspace(svc, design), rev)
         index = await asyncio.to_thread(svc.artifacts.index, board_hash)
         return {**index, "board_hash": board_hash}
@@ -724,9 +728,11 @@ def create_app() -> FastAPI:
     async def threads(request: Request, design: str, status: str | None = None, rev: str = "working"):
         svc = _svc(request)
         ws = _workspace(svc, design)
+        out = svc.store.review.list(design, status=status)
+        if ws.phase() == "schematic":
+            return out
         board_hash = await _rev_hash(svc, ws, rev)
         index = await asyncio.to_thread(svc.artifacts.index, board_hash)
-        out = svc.store.review.list(design, status=status)
         for t in out:
             t["resolved_anchor"] = svc.store.review.resolve_anchor(t, index)
         return out

@@ -318,3 +318,19 @@ def test_skidl_generates_a_loadable_schematic(tmp_path: Path) -> None:
         text=True,
     )
     assert svg.returncode == 0, svg.stdout + svg.stderr
+
+
+def test_skidl_failure_names_the_problem(tmp_path: Path) -> None:
+    """A wrong symbol must come back as a readable reason, not a traceback."""
+    from kicad_harness.engine import skidl_gen
+
+    if not skidl_gen.available():
+        pytest.skip("skidl is not installed")
+    parts = [skidl_gen.PartSpec("U1", "Timer", "NE555NOTREAL", value="x")]
+    with pytest.raises(Exception) as info:
+        skidl_gen.generate(parts, [], tmp_path / "schematic.kicad_sch")
+    assert "Unable to find part" in str(info.value)
+
+    # ...and the near-miss suggestions point at a real symbol.
+    matches = skidl_gen.suggest_symbols("Timer", "NE555")
+    assert "NE555P" in matches

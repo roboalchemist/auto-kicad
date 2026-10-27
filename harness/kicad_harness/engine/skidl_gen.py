@@ -169,16 +169,46 @@ def generate(
         log_path = tmpdir / "skidl.log"
         log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
         if proc.returncode != 0 or not produced.is_file():
-            detail = (proc.stderr or proc.stdout or "").strip().splitlines()[-8:]
-            raise EngineError(
-                "SchematicGeneration",
-                "skidl could not generate the schematic: " + (" | ".join(detail) or "no output"),
-            )
+            raise EngineError("SchematicGeneration", _explain(proc, log))
         tmp_out = out.with_suffix(out.suffix + ".tmp")
         shutil.copyfile(produced, tmp_out)
         tmp_out.replace(out)
     warnings = [line for line in log.splitlines() if "WARNING" in line or "ERROR" in line]
     return GenerationResult(path=out, log=log, warnings=warnings)
+
+
+def _explain(proc: subprocess.CompletedProcess[str], log: str) -> str:
+    """A short, actionable reason skidl failed.
+
+    The agent reads this, so lead with the actual complaint (a missing part, a routing
+    failure) rather than the last frames of a traceback.
+    """
+    output = f"{proc.stdout or ''}\n{proc.stderr or ''}\n{log}"
+    for line in output.splitlines():
+        text = line.strip()
+        if any(text.startswith(k) for k in ("ValueError:", "KeyError:", "FileNotFoundError:", "RoutingFailure")):
+            return f"skidl could not generate the schematic: {text[:400]}"
+        if text.startswith("ERROR:"):
+            return f"skidl could not generate the schematic: {text[:400]}"
+    tail = [line.strip() for line in output.splitlines() if line.strip()][-4:]
+    return "skidl could not generate the schematic: " + (" | ".join(tail) or "no output")
+
+
+def suggest_symbols(library: str, name: str, limit: int = 12) -> list[str]:
+    """Symbols in ``library`` whose name is close to ``name``, for a useful error message."""
+    import difflib
+
+    from .schematic import read_library
+
+    for directory in _default_symbol_dirs():
+        path = Path(directory) / f"{library}.kicad_sym"
+        if path.is_file():
+            try:
+                names = list(read_library(path))
+            except Exception:
+                return []
+            return difflib.get_close_matches(name, names, n=limit, cutoff=0.5) or sorted(names)[:limit]
+    return []
 
 
 def _env(symbol_dirs: list[Path] | None, footprint_dirs: list[Path] | None) -> dict[str, str]:

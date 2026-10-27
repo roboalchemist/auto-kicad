@@ -1131,7 +1131,19 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
                 skidl_gen.generate, validated_parts, validated_nets, target,
             )
         except Exception as exc:
-            return ToolReturn(return_value={"ok": False, "error": _engine_error_text(exc)})
+            message = _engine_error_text(exc)
+            # "Unable to find part NE555 in library Timer." is the usual mistake; name the
+            # alternatives so the model can fix it instead of guessing again.
+            missing = re.search(r"Unable to find part (\S+) in library (\S+)", message)
+            if missing:
+                name, library = missing.group(1).rstrip("."), missing.group(2).rstrip(".")
+                try:
+                    options = skidl_gen.suggest_symbols(library, name)
+                except Exception:
+                    options = []
+                if options:
+                    message += f" (symbols in {library} that match: {', '.join(options)})"
+            return ToolReturn(return_value={"ok": False, "error": message})
         payload = {"ok": True, "path": target.name, "parts": len(validated_parts), "nets": len(validated_nets)}
         if result.warnings:
             payload["warnings"] = result.warnings[:10]

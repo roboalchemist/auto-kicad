@@ -225,6 +225,8 @@ export async function refreshDesignData(full = false) {
 export async function loadSvg() {
   const { designName: name, rev, side, svgKey, design } = getStore();
   if (!name || (side !== "front" && side !== "back")) return;
+  // A schematic-phase design has no board to plot; the schematic viewer loads its own sheet.
+  if (design?.phase === "schematic") return;
   await catchErr(async () => {
     const text = await api.svg(name, rev, side, svgKey ? `${svgKey}-${design?.board_hash ?? ""}` : design?.board_hash);
     setStore({ svg: text, svgSide: side as "front" | "back" });
@@ -301,7 +303,7 @@ export function setBoardSize(w: number, h: number) {
 
 export function fitView(containerW = 0, containerH = 0) {
   const idx = getStore().index;
-  if (!idx) return;
+  if (!idx || !idx.board) return;
   const [, ex, ey, ew, eh] = [0, idx.board.edge_bbox[0], idx.board.edge_bbox[1], idx.board.edge_bbox[2], idx.board.edge_bbox[3]];
   const dims = svgDims();
   const w = dims?.w ?? ew;
