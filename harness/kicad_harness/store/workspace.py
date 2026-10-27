@@ -527,6 +527,46 @@ class Workspace:
         """Absolute path of the working-copy board file."""
         return self.path / BOARD_FILE
 
+    @property
+    def schematic_path(self) -> Path:
+        """Absolute path of the working-copy schematic file."""
+        return self.path / SCHEMATIC_FILE
+
+    def project(self) -> dict[str, Any]:
+        """The working-copy ``project.json`` (``DEFAULT_PROJECT`` if the file is missing)."""
+        path = self.path / PROJECT_FILE
+        if not path.is_file():
+            return copy.deepcopy(DEFAULT_PROJECT)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            return copy.deepcopy(DEFAULT_PROJECT)
+        return data if isinstance(data, dict) else copy.deepcopy(DEFAULT_PROJECT)
+
+    def phase(self) -> str:
+        """``"schematic"`` or ``"board"``.
+
+        A workspace created before phases existed has a board and no ``project.json``, so the
+        presence of the board file decides: no board means the schematic phase.
+        """
+        phase = self.project().get("phase")
+        if phase in PHASES:
+            return str(phase)
+        return PHASE_BOARD if self.board_path.is_file() else PHASE_SCHEMATIC
+
+    def set_phase(self, phase: str, author: str = "agent") -> None:
+        """Record the design's phase in ``project.json`` (committed with the next change)."""
+        _check_phase(phase)
+        project = self.project()
+        project["phase"] = phase
+        with self.lock:
+            (self.path / PROJECT_FILE).write_text(_dump_goal(project), encoding="utf-8")
+
+    def brief(self) -> str | None:
+        """The prompt the design was created from, if any."""
+        brief = self.project().get("brief")
+        return brief if isinstance(brief, str) and brief.strip() else None
+
     def goal(self) -> dict[str, Any]:
         """The working-copy ``goal.json`` (``DEFAULT_GOAL`` if the file is missing)."""
         path = self.path / GOAL_FILE

@@ -228,6 +228,7 @@ class LibrarySymbol:
     reference: str = "U"
     value: str = ""
     footprint: str = ""
+    power: bool = False
     body: list = field(default_factory=list)
 
     @property
@@ -287,6 +288,7 @@ def read_library(path: str | Path) -> dict[str, LibrarySymbol]:
             reference=reference,
             value=value,
             footprint=footprint,
+            power=find_one(sym, "power") is not None,
             body=sym,
         )
     return out
@@ -555,9 +557,19 @@ class Schematic:
             find(point)
 
         pin_nodes: list[tuple[tuple[float, float], str, str, str]] = []
+        power_points: dict[str, list[tuple[float, float]]] = {}
         for placement in self.placements():
             symbol = self.lookup(placement.lib_id)
-            if symbol is None or placement.reference.startswith("#"):
+            if symbol is None:
+                continue
+            if placement.reference.startswith("#"):
+                # Power symbols (#PWR..) name a global net through their value and connect at
+                # their single pin; they are not parts on the board.
+                if placement.lib_id.startswith("power:") or symbol.power:
+                    for number in symbol.pins:
+                        points = self.pin_points(placement, number)
+                        if points:
+                            power_points.setdefault(placement.value or symbol.value, []).extend(points)
                 continue
             for number, pin in symbol.pins.items():
                 points = self.pin_points(placement, number)
@@ -580,8 +592,15 @@ class Schematic:
                 members.append(entry)
 
         names: dict[tuple[float, float], str] = {}
-        for point, name in labels.items():
+        # Explicit labels win over power-symbol names, and both are deterministic: with two
+        # names at one point, sorting decides rather than dict insertion order.
+        for point, name in sorted(labels.items()):
             names.setdefault(find(point), name)
+        for net_name, points in sorted(power_points.items()):
+            for point in points:
+                mapped = NetNode(*point).key()
+                if mapped in parent:
+                    names.setdefault(find(mapped), net_name)
 
         out: dict[str, list[dict[str, Any]]] = {}
         unnamed = 0
@@ -893,6 +912,7 @@ def _embedded_symbol(full_name: str, node: list) -> LibrarySymbol:
         reference=reference,
         value=value,
         footprint=footprint,
+        power=find_one(node, "power") is not None,
         body=node,
     )
 

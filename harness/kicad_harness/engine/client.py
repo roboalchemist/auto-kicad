@@ -271,6 +271,10 @@ class Engine:
         """Refill all zones. ``{"zones": n}``."""
         return self.call("refill_zones", board)
 
+    def create_board(self, board: str | os.PathLike[str], width: float = 50, height: float = 50) -> dict:
+        """Start an empty two-layer board with a rectangular outline. Raises if one exists."""
+        return self.call("create_board", board, width=width, height=height)
+
     def add_footprint(self, board: str | os.PathLike[str], footprint: str, ref: str, value: str, x: float,
                       y: float, rotation: float = 0, side: str = "front",
                       footprint_dirs: Sequence[str | os.PathLike[str]] | None = None) -> dict:

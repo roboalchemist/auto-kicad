@@ -33,3 +33,20 @@ Rules, each verified by bisection:
 
 A working end-to-end check (symbols → `connect_pins` → save → reload) that passes ERC with 0
 violations is in `tests/test_schematic.py`.
+
+## Connectivity: ask KiCad, don't re-derive it
+
+The first version of the schematic→board handoff read nets geometrically (union-find over pin
+points, wire ends and labels). It mostly worked and then disagreed with KiCad on one pin: a
+power symbol and a global label can name the same point, and dict insertion order decided which
+won. Two lessons:
+
+- **Use `kicad-cli sch export netlist`** as the authority for connectivity
+  (`kicad_cli.export_netlist` + `parse_netlist`). It applies eeschema's own rules, including
+  power symbols and global labels. The geometric extractor stays for quick agent queries, but
+  the one-way transition to a board seeds pads from KiCad's netlist.
+- Power symbols (`#PWR..`, `(power)` in the library) are not parts: they connect at their one
+  pin and name a global net through their **value**. Skipping every `#` reference loses GND/VCC.
+
+`engine/seed.py` places footprints on a grid and assigns pad nets from that netlist. A missing
+footprint is reported per part instead of aborting the whole board.

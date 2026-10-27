@@ -45,6 +45,10 @@ class DesignState(BaseModel):
     branch: str | None = None
     head: str | None = None
     revision: int = 0
+    # "schematic" until a board is laid out from the schematic, then "board".
+    phase: str = "board"
+    brief: str | None = None
+    schematic_hash: str | None = None
     board_hash: str | None = None
     goal: GoalStatus | None = None
     last_render: RenderInfo | None = None

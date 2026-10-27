@@ -875,6 +875,37 @@ def refill_zones(board):
 
 
 @rpc
+def create_board(board, width=50, height=50):
+    """Start a new, empty two-layer board with a rectangular outline.
+
+    Used when a schematic becomes a laid-out board: the caller then places the schematic's
+    footprints and assigns their pads. Refuses to overwrite an existing board.
+    """
+    width = _num(width, "width", positive=True)
+    height = _num(height, "height", positive=True)
+    path = _abspath(board)
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        raise RpcError("InvalidParams", "board already exists: %s" % path)
+    tmp = path + ".new"
+    fresh = pcbnew.NewBoard(tmp)
+    try:
+        s = pcbnew.PCB_SHAPE(fresh)
+        s.SetShape(pcbnew.SHAPE_T_RECTANGLE)
+        s.SetLayer(pcbnew.Edge_Cuts)
+        s.SetStart(_vec(0, 0))
+        s.SetEnd(_vec(width, height))
+        s.SetWidth(fresh.GetDesignSettings().GetLineThickness(pcbnew.Edge_Cuts))
+        fresh.Add(s)
+        _save(fresh, path)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    return {"bbox": [0, 0, round(width, 6), round(height, 6)]}
+
+
+@rpc
 def add_footprint(board, footprint, ref, value, x, y, rotation=0, side="front", footprint_dirs=None):
     """Place a library footprint (``Lib:Name`` or bare ``Name``, searched in ``footprint_dirs``)."""
     x, y, rotation = _num(x, "x"), _num(y, "y"), _num(rotation, "rotation")

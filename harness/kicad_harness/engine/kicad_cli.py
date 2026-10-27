@@ -199,11 +199,78 @@ def export_sch_svg(schematic: str | os.PathLike[str], out_dir: str | os.PathLike
     return sorted(target.glob("*.svg"))
 
 
+def export_netlist(schematic: str | os.PathLike[str], out: str | os.PathLike[str], *,
+                   config: Config | None = None, timeout: float = 300) -> Path:
+    """Export KiCad's own netlist for ``schematic``; returns the file path.
+
+    This is the authority on connectivity: it applies KiCad's rules for pins, wires, labels
+    and power symbols exactly as eeschema does.
+    """
+    path = _schematic_path(schematic)
+    target = Path(out)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    run(["sch", "export", "netlist", "-o", str(target), str(path)], config=config, timeout=timeout)
+    return target
+
+
+def parse_netlist(text: str) -> dict[str, Any]:
+    """Read a KiCad netlist into ``{"components": [...], "nets": {name: [(ref, pin)]}}``.
+
+    Components carry ``ref``, ``value`` and ``footprint``; nets map a name to its
+    ``(reference, pin)`` nodes. Malformed input raises ``EngineError("KiCadCliError")``.
+    """
+    from . import schematic as schema_mod
+
+    try:
+        tree = schema_mod.parse(text)
+    except Exception as exc:  # the netlist is KiCad's own format, but be defensive
+        raise EngineError("KiCadCliError", f"unreadable netlist: {exc}") from exc
+
+    find_all, find_one = schema_mod.find_all, schema_mod.find_one
+    components: list[dict[str, Any]] = []
+    comps = find_one(tree, "components")
+    if comps is not None:
+        for comp in find_all(comps, "comp"):
+            ref = _text(find_one(comp, "ref"))
+            if not ref:
+                continue
+            components.append(
+                {
+                    "ref": ref,
+                    "value": _text(find_one(comp, "value")),
+                    "footprint": _text(find_one(comp, "footprint")),
+                }
+            )
+
+    nets: dict[str, list[tuple[str, str]]] = {}
+    nets_node = find_one(tree, "nets")
+    if nets_node is not None:
+        for net in find_all(nets_node, "net"):
+            name = _text(find_one(net, "name"))
+            nodes = []
+            for node in find_all(net, "node"):
+                ref = _text(find_one(node, "ref"))
+                pin = _text(find_one(node, "pin"))
+                if ref and pin:
+                    nodes.append((ref, pin))
+            if name:
+                nets[name] = nodes
+    return {"components": components, "nets": nets}
+
+
 def _schematic_path(schematic: str | os.PathLike[str]) -> Path:
     path = Path(schematic).expanduser().resolve()
     if not path.is_file():
         raise EngineError("NotFound", f"Schematic file not found: {path}")
     return path
+
+
+def _text(node: list | None) -> str:
+    """The scalar payload of ``(name "value")``, or ``""``."""
+    if not node or len(node) < 2:
+        return ""
+    value = node[1]
+    return "" if isinstance(value, list) else str(value).strip()
 
 
 # ----------------------------------------------------------------------------------- SVG
