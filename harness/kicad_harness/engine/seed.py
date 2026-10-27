@@ -89,6 +89,9 @@ def seed_board(
             "the schematic has no symbols with a footprint, so there is nothing to lay out; "
             "give each part a footprint first"
         )
+    # Virtual parts (PWR_FLAG, power symbols) carry a "#" reference and never reach the board.
+    board_refs = {c["ref"] for c in components if not str(c["ref"]).startswith("#")}
+    components = [c for c in components if str(c["ref"]).startswith("#") is False and c["ref"] in board_refs]
 
     board_path = Path(board_path)
     cols = max(1, math.ceil(math.sqrt(len(components))))

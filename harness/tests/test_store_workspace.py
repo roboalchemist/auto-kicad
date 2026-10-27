@@ -60,7 +60,9 @@ def test_create_imports_the_board(ws, config, board_src):
     assert sorted(p.name for p in ws.path.iterdir()) == [".git", ".gitignore", "board.kicad_pcb", "goal.json"]
     assert ws.board_path.read_bytes() == FIXTURE.read_bytes()
     assert (ws.path / ".gitignore").read_text() == GITIGNORE
-    assert GITIGNORE.split() == ["*.kicad_prl", "fp-info-cache", "*-backups/", "~*.lck", ".history/"]
+    assert GITIGNORE.split() == [
+        "*.kicad_prl", "fp-info-cache", "*-backups/", "~*.lck", ".history/", "skidl/", "*_skidl.erc",
+    ]
     assert ws.goal() == DEFAULT_GOAL
     assert [c["id"] for c in ws.goal()["criteria"]] == ["drc", "routed", "review"]
     assert ws.branch() == "main" and not ws.dirty()

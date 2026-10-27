@@ -29,6 +29,14 @@ except ImportError:  # pragma: no cover - not POSIX
 if TYPE_CHECKING:
     from ..config import Config
 
+
+def empty_schematic(paper: str = "A4") -> str:
+    """A new, empty schematic file's text (imported lazily so workspace stays engine-free)."""
+    from ..engine.schematic import empty_schematic as build
+
+    return build(paper)
+
+
 BOARD_FILE = "board.kicad_pcb"
 SCHEMATIC_FILE = "schematic.kicad_sch"
 GOAL_FILE = "goal.json"
@@ -488,7 +496,11 @@ class Workspace:
             (staging / PROJECT_FILE).write_text(_dump_goal(project), encoding="utf-8")
             goal_obj = DEFAULT_SCHEMATIC_GOAL if goal is None else dict(goal)
             # The brief is the intent; keep it in the goal so the agent always sees it.
-            goal_obj.setdefault("summary", brief.strip())
+            if goal is None:
+                goal_obj = copy.deepcopy(DEFAULT_SCHEMATIC_GOAL)
+                goal_obj["summary"] = f'{brief.strip()} — {DEFAULT_SCHEMATIC_GOAL["summary"]}'
+            else:
+                goal_obj.setdefault("summary", brief.strip())
             (staging / GOAL_FILE).write_text(_dump_goal(goal_obj), encoding="utf-8")
             _commit(staging, f"Start {name} from a prompt", "user")
             try:
@@ -504,6 +516,10 @@ class Workspace:
 
     @classmethod
     def open(cls, config: Config, name: str) -> Workspace:
+        """Return the existing workspace ``name``; raises ``FileNotFoundError`` if there is none."""
+        if not cls.exists(config, name):
+            raise FileNotFoundError(f"no design named {name!r}")
+        return cls(config, name)
 
     @classmethod
     def exists(cls, config: Config, name: str) -> bool:

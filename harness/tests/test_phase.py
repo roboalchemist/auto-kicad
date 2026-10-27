@@ -1,0 +1,168 @@
+"""The schematic phase end to end: a prompt-created design, drawn, then handed to layout.
+
+Driven through the real agent tools with a scripted model, against real KiCad, so this covers
+the tools, the workspace phases and the schematic→board transition together.
+"""
+
+from __future__ import annotations
+
+import re
+
+import pytest
+
+from kicad_harness.agent.agent import HarnessDeps, Services, build_agent
+from kicad_harness.agent.state import DesignState
+from kicad_harness.config import Config
+from kicad_harness.store.workspace import Workspace
+from tests.test_agent import Script
+
+ARE_PACKAGE = "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+R_PACKAGE = "Resistor_SMD:R_0805_2012Metric"
+C_PACKAGE = "Capacitor_SMD:C_0805_2012Metric"
+
+
+def _footprints_available(config: Config) -> bool:
+    return any((dir / "Resistor_SMD.pretty").is_dir() for dir in (config.footprint_dirs or []))
+
+
+@pytest.fixture(scope="module")
+def services(tmp_path_factory):
+    config = Config(home=tmp_path_factory.mktemp("home")).ensure_dirs()
+    svc = Services.create(config)
+    yield svc
+    close = getattr(svc.engine, "close", None)
+    if close:
+        close()
+
+
+@pytest.fixture
+def new_project(services, request):
+    name = re.sub(r"[^A-Za-z0-9_.-]", "-", request.node.name)[:50]
+    ws = Workspace.create_schematic(services.config, name, "A 555 LED blinker run from 5 V.")
+    return name, ws
+
+
+def deps_for(services, name, **state) -> HarnessDeps:
+    return HarnessDeps(state=DesignState(design=name, phase="schematic", **state), services=services, run_id="t")
+
+
+def test_prompt_project_starts_in_the_schematic_phase(services, new_project):
+    name, ws = new_project
+    assert ws.phase() == "schematic"
+    assert ws.brief() == "A 555 LED blinker run from 5 V."
+    assert ws.schematic_path.is_file()
+    assert not ws.board_path.exists()
+    goal = ws.goal()
+    assert {c["type"] for c in goal["criteria"]} == {"erc_errors", "board_laid_out"}
+    # The brief reaches the agent through the goal summary.
+    assert "555" in goal["summary"]
+
+
+async def test_agent_draws_and_then_hands_off_to_layout(services, new_project):
+    if not _footprints_available(services.config):
+        pytest.skip("no KiCad footprint libraries on this machine")
+    name, ws = new_project
+    part = {"library": "Device", "symbol": "R", "value": "10k", "footprint": R_PACKAGE}
+    # A complete divider: every pin lands on a net, so ERC is clean and the handoff can happen.
+    nets = [
+        {"name": "VIN", "pins": ["R1.1", "C1.1"]},
+        {"name": "VOUT", "pins": ["R1.2", "R2.1", "C2.1"]},
+        {"name": "GND", "pins": ["R2.2", "C1.2", "C2.2"]},
+    ]
+    script = Script([
+        [("schematic_summary", {})],
+        [
+            (
+                "generate_schematic_skidl",
+                {
+                    "parts": [
+                        {"ref": "R1", **part},
+                        {"ref": "R2", **part},
+                        {"ref": "C1", "library": "Device", "symbol": "C", "value": "100n", "footprint": C_PACKAGE},
+                        {"ref": "C2", "library": "Device", "symbol": "C", "value": "100n", "footprint": C_PACKAGE},
+                    ],
+                    "nets": nets,
+                },
+            )
+        ],
+        [("check_schematic", {})],
+        [("start_board_layout", {})],
+        "done",
+    ])
+    agent = build_agent()
+    deps = deps_for(services, name)
+    with agent.override(model=script.model()):
+        result = await agent.run("draw it", deps=deps)
+    assert result.output == "done"
+
+    # The schematic holds every part, and the board came from it.
+    assert ws.phase() == "board"
+    assert ws.board_path.is_file()
+    from kicad_harness.engine.schematic import Schematic
+
+    doc = Schematic.load(ws.schematic_path)
+    assert {p.reference for p in doc.placements() if not p.reference.startswith("#")} == {
+        "R1", "R2", "C1", "C2",
+    }
+
+    board_hash, _ = services.artifacts.materialize(ws.board_path.read_bytes())
+    index = services.artifacts.index(board_hash)
+    assert {"R1", "R2", "C1", "C2"} <= {f["ref"] for f in index["footprints"]}
+    # Nets named in the schematic exist on the board.
+    assert {"VIN", "VOUT", "GND"} <= set(n for n in index.get("nets", []) if n)
+    assert deps.state.phase == "board"
+
+
+async def test_board_tools_refuse_until_there_is_a_board(services, new_project):
+    name, ws = new_project
+    script = Script([[("move_footprint", {"ref": "R1", "x": 10.0, "y": 10.0})], "done"])
+    agent = build_agent()
+    deps = deps_for(services, name)
+    with agent.override(model=script.model()):
+        result = await agent.run("move it", deps=deps)
+    # The model was told to stay in the schematic phase; nothing was committed.
+    assert result.output == "done"
+    assert ws.phase() == "schematic"
+    assert not ws.board_path.exists()
+    assert len(ws.log()) == 1  # only the creation commit
+
+
+async def test_schematic_tools_edit_and_commit(services, new_project):
+    name, ws = new_project
+    script = Script(
+        [
+            [("add_symbol", {"symbol": "Device:R", "ref": "R1", "x": 100.0, "y": 100.0})],
+            [("add_symbol", {"symbol": "Device:R", "ref": "R2", "x": 120.0, "y": 100.0})],
+            [("connect_pins", {"a": "R1.1", "b": "R2.1", "net": "MID"})],
+            [("add_schematic_label", {"name": "GND", "x": 100.0, "y": 110.0})],
+            "done",
+        ]
+    )
+    agent = build_agent()
+    deps = deps_for(services, name)
+    with agent.override(model=script.model()):
+        await agent.run("draw two resistors", deps=deps)
+
+    from kicad_harness.engine.schematic import Schematic
+
+    doc = Schematic.load(ws.schematic_path)
+    assert {p.reference for p in doc.placements()} == {"R1", "R2"}
+    assert "MID" in doc.nets()
+    # Each edit is its own version.
+    assert len(ws.log()) == 5
+    assert deps.state.schematic_hash
+
+
+async def test_schematic_edits_refused_after_the_board_exists(services, new_project):
+    name, ws = new_project
+    # Pretend the board phase already happened.
+    ws.set_phase("board")
+    script = Script([[("add_symbol", {"symbol": "Device:R", "ref": "R9", "x": 10.0, "y": 10.0})], "done"])
+    agent = build_agent()
+    deps = deps_for(services, name)
+    with agent.override(model=script.model()):
+        await agent.run("add one", deps=deps)
+
+    from kicad_harness.engine.schematic import Schematic
+
+    assert Schematic.load(ws.schematic_path).placements() == []

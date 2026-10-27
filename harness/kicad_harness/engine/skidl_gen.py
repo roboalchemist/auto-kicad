@@ -209,6 +209,8 @@ def _json(payload: Any) -> str:
 
 
 # Runs as its own process; reads a JSON spec on stdin and writes schematic.kicad_sch in cwd.
+# Power nets (and any net that is only ever a power-input) need a PWR_FLAG, otherwise ERC
+# reports "power pin not driven" — the same thing eeschema asks for when you draw a supply.
 _SCRIPT = r'''
 import json
 import sys
@@ -231,6 +233,14 @@ for item in spec["nets"]:
     for ref, pin in item["pins"]:
         part = parts[ref]
         net += part[int(pin)] if pin.isdigit() else part[pin]
+    nets[item["name"]] = net
+
+for name, net in list(nets.items()):
+    if not net.get_pins():
+        continue
+    flag = Part("power", "PWR_FLAG", value="PWR_FLAG")
+    flag.ref = "#FLG%s" % (abs(hash(name)) % 10000)
+    flag[1] += net
 
 generate_schematic(tool=KICAD10)
 sys.exit(0)
