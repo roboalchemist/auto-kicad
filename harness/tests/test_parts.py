@@ -73,3 +73,23 @@ def test_check_part_flags_a_part_jlc_does_not_stock() -> None:
     result = parts.check_part("ZZZNOTAPART999")
     assert result["usable_for_jlc"] is False
     assert any("JLCPCB" in n for n in result["notes"])
+
+
+@needs_db
+def test_category_search_finds_in_stock_parts() -> None:
+    """Descriptions are empty in this catalogue, so categories are the way to browse by type."""
+    cats = parts.categories("LED")
+    assert cats and cats[0]["in_stock"] > 0
+    hits = parts.search_jlc(category="LED", package="0805", limit=3)
+    assert hits["parts"], hits
+    assert all("0805" in (p["package"] or "") for p in hits["parts"])
+
+
+@needs_db
+def test_empty_result_explains_which_filter_emptied_it() -> None:
+    """NE555 has no basic parts; the empty answer must say so instead of looking like 'no such part'."""
+    result = parts.search_jlc("NE555", basic_only=True)
+    assert result["count"] == 0
+    reason = result["empty_reason"]
+    assert reason["matching_any_stock"] > 0
+    assert "basic_only=false" in reason["note"]

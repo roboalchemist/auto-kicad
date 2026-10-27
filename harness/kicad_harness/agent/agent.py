@@ -505,7 +505,8 @@ Phases:
 - Prefer `generate_schematic_skidl` to draw a whole design from a parts and nets list; use the individual symbol and wiring tools to fix or extend it. Every part needs a real KiCad footprint (`Library:Footprint`) or it cannot be placed on the board.
 
 Part sourcing (do this before choosing parts):
-- Boards are assembled by JLCPCB, so a part is only real if JLCPCB stocks it. Use `find_parts` to search their catalogue (it reports stock, unit price, and whether a part is `basic` — no extra fee — or `extended` — a per-part reel fee). Prefer basic parts and large stock unless the user asks otherwise.
+- Boards are assembled by JLCPCB, so a part is only real if JLCPCB stocks it. Use `find_parts` to search their catalogue: pass `query` for a part number (e.g. "NE555" finds NE555DR) or `category` to browse by type (e.g. "LED", "Relays"). It reports stock, unit price, and whether a part is `basic` (no assembly fee) or `extended` (a per-part reel fee). Prefer basic parts with large stock unless the user asks otherwise. The catalogue's description text is empty, so searching for words like "red LED" will not work — browse the category instead.
+- Very few parts are basic: if `find_parts` returns an empty list, read its `empty_reason` (it says which filter removed everything) and retry with that filter relaxed rather than repeating the same query.
 - Use `check_part` on each part you intend to use: it returns the JLCPCB matches plus datasheet availability. If `usable_for_jlc` is false, say so and choose a stocked alternative rather than designing a board that cannot be made.
 - Use `part_datasheet` to confirm a pinout or rating when you are not certain; it returns datasheet text. If i2cdb has no record, a supplier datasheet URL is included — do not invent pin numbers you have not verified.
 - Mention the LCSC codes and the basic/extended split to the user when you finish the schematic.
@@ -1291,21 +1292,40 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
     async def find_parts(
         ctx: RunContext[HarnessDeps],
         query: str | None = None,
+        category: str | None = None,
         package: str | None = None,
         basic_only: bool = False,
         limit: int = 15,
     ) -> ToolReturn:
-        """Search the JLCPCB catalogue for parts that can actually be assembled (stock, price, basic vs extended)."""
+        """Search the JLCPCB catalogue for parts that can actually be assembled.
+
+        `query` matches the manufacturer part number (e.g. "NE555" finds NE555DR). `category`
+        browses by type (e.g. "LED", "Resistors", "Relays"), which is how to find a part when you
+        know what it does but not its number. Results carry stock, unit price and whether the
+        part is basic (no assembly fee) or extended.
+        """
         from kicad_harness.engine import parts
 
         try:
             result = await asyncio.to_thread(
-                parts.search_jlc, query, package=package, basic_only=basic_only, limit=limit
+                parts.search_jlc, query, category=category, package=package,
+                basic_only=basic_only, limit=limit,
             )
         except Exception as exc:
             return ToolReturn(return_value={"ok": False, "error": _engine_error_text(exc)})
         result["ok"] = True
         return ToolReturn(return_value=result)
+
+    @agent.tool
+    async def part_categories(ctx: RunContext[HarnessDeps], term: str | None = None) -> ToolReturn:
+        """List JLCPCB part categories (optionally filtered, e.g. "relay") with how many are in stock."""
+        from kicad_harness.engine import parts
+
+        try:
+            items = await asyncio.to_thread(parts.categories, term)
+        except Exception as exc:
+            return ToolReturn(return_value={"ok": False, "error": _engine_error_text(exc)})
+        return ToolReturn(return_value={"ok": True, "categories": items})
 
     @agent.tool
     async def check_part(ctx: RunContext[HarnessDeps], mpn: str, lcsc: str | None = None) -> ToolReturn:

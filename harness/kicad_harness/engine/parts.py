@@ -112,14 +112,18 @@ def search_jlc(
     query: str | None = None,
     *,
     package: str | None = None,
+    category: str | None = None,
     basic_only: bool = False,
     in_stock: bool = True,
     limit: int = 20,
 ) -> dict[str, Any]:
-    """Search the JLCPCB catalogue by manufacturer part number (and optional package).
+    """Search the JLCPCB catalogue.
 
-    ``query`` matches the MPN as a case-insensitive substring; parts are ranked basic first,
-    then by stock.
+    ``query`` matches the manufacturer part number as a substring (``NE555`` finds ``NE555DR``).
+    ``category`` browses by the catalogue's own taxonomy (``"LED"``, ``"Resistors"``,
+    ``"Capacitors"``), which is the reliable way to find a part when you know what it does but
+    not its number — the catalogue's description column is empty for almost every part.
+    Results are ranked basic first, then by stock.
     """
     if limit < 1 or limit > 100:
         raise PartsError("limit must be between 1 and 100")
@@ -128,6 +132,9 @@ def search_jlc(
     if query:
         where.append("mfr LIKE ?")
         params.append(f"%{query.strip()}%")
+    if category:
+        where.append("category_id IN (SELECT id FROM categories WHERE category LIKE ? OR subcategory LIKE ?)")
+        params += [f"%{category.strip()}%", f"%{category.strip()}%"]
     if package:
         where.append("package LIKE ?")
         params.append(f"%{package.strip()}%")
@@ -142,7 +149,52 @@ def search_jlc(
     params.append(limit)
     with _connect() as conn:
         rows = conn.execute(sql, params).fetchall()
-    return {"source": "jlcpcb", "query": query, "parts": [_part_row(r) for r in rows], "count": len(rows)}
+        parts = [_part_row(r) for r in rows]
+        if not parts:
+            # An empty list is ambiguous — say which filter emptied it, and what relaxing that
+            # filter would find, so a caller can adapt instead of retrying the same query.
+            relaxed = _relaxed_hint(conn, query, package, category, basic_only, in_stock)
+    out: dict[str, Any] = {"source": "jlcpcb", "query": query, "parts": parts, "count": len(parts)}
+    if not parts:
+        out["empty_reason"] = relaxed
+    return out
+
+
+def _relaxed_hint(
+    conn: sqlite3.Connection,
+    query: str | None,
+    package: str | None,
+    category: str | None,
+    basic_only: bool,
+    in_stock: bool,
+) -> dict[str, Any]:
+    """Explain an empty JLCPCB result by counting matches with each filter dropped."""
+    base = "FROM components"
+    conds: list[tuple[str, list[Any]]] = []
+    if query:
+        conds.append(("mfr LIKE ?", [f"%{query.strip()}%"]))
+    if category:
+        conds.append(("category_id IN (SELECT id FROM categories WHERE category LIKE ? OR subcategory LIKE ?)",
+                      [f"%{category.strip()}%", f"%{category.strip()}%"]))
+    if package:
+        conds.append(("package LIKE ?", [f"%{package.strip()}%"]))
+    total = conn.execute(f"SELECT count(*) {base} WHERE " + " AND ".join(c for c, _ in conds),
+                         [p for _, ps in conds for p in ps]).fetchone()[0] if conds else 0
+    hint: dict[str, Any] = {"matching_any_stock": total}
+    if basic_only:
+        hint["matching_basic_in_stock"] = 0
+        hint["note"] = (
+            "no basic parts match; JLCPCB charges a reel fee for extended parts. "
+            "Retry with basic_only=false to see the extended options."
+        )
+    elif not in_stock:
+        hint["note"] = "no matches; try a shorter MPN fragment (matching is a substring of the part number)"
+    else:
+        hint["note"] = (
+            "no in-stock matches; matching is a substring of the manufacturer part number "
+            "(e.g. 'NE555' finds NE555DR), not a description search"
+        )
+    return hint
 
 
 def get_jlc(lcsc: str) -> dict[str, Any] | None:
@@ -153,6 +205,25 @@ def get_jlc(lcsc: str) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute(f"SELECT {_COLUMNS} FROM components WHERE lcsc = ?", (int(digits),)).fetchone()
     return _part_row(row) if row else None
+
+
+def categories(term: str | None = None, limit: int = 40) -> list[dict[str, Any]]:
+    """The catalogue's categories, optionally filtered by ``term`` (``"LED"``, ``"relay"``)."""
+    sql = (
+        "SELECT c.category, c.subcategory, count(x.lcsc) AS n FROM categories c "
+        "JOIN components x ON x.category_id = c.id AND x.stock > 0 "
+    )
+    params: list[Any] = []
+    if term:
+        sql += "WHERE c.category LIKE ? OR c.subcategory LIKE ? "
+        params += [f"%{term}%", f"%{term}%"]
+    sql += "GROUP BY c.id ORDER BY n DESC LIMIT ?"
+    params.append(limit)
+    with _connect() as conn:
+        return [
+            {"category": cat, "subcategory": sub, "in_stock": n}
+            for cat, sub, n in conn.execute(sql, params)
+        ]
 
 
 @lru_cache(maxsize=1)
