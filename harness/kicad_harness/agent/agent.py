@@ -608,7 +608,7 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
     # ------------------------------------------------------------------ inspection
 
     @agent.tool
-    async def design_summary(ctx: RunContext[HarnessDeps]) -> ToolReturn:
+    async def design_summary(ctx: RunContext[HarnessDeps], **_: Any) -> ToolReturn:
         """Board outline, components (ref, value, footprint, position, side), nets, DRC counts, goal status and open review threads."""
         svc = ctx.deps.services
         ws = _ws(ctx)
@@ -697,7 +697,7 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
             raise ModelRetry(f"Could not measure {a!r} to {b!r}: {exc}") from exc
 
     @agent.tool
-    async def check(ctx: RunContext[HarnessDeps]) -> ToolReturn:
+    async def check(ctx: RunContext[HarnessDeps], **_: Any) -> ToolReturn:
         """Run KiCad DRC on the current board and evaluate every goal criterion."""
         svc = ctx.deps.services
         await _sync_state(ctx)
@@ -952,7 +952,7 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         )
 
     @agent.tool(sequential=True)
-    async def refill_zones(ctx: RunContext[HarnessDeps]) -> ToolReturn:
+    async def refill_zones(ctx: RunContext[HarnessDeps], **_: Any) -> ToolReturn:
         """Refill every copper zone (do this after moving parts or tracks under a pour)."""
         return await _edit(
             ctx, "refill_zones", "Refill copper zones",
@@ -1052,8 +1052,13 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
     # ------------------------------------------------------------------ schematic phase
 
     @agent.tool
-    async def schematic_summary(ctx: RunContext[HarnessDeps]) -> ToolReturn:
-        """The schematic: paper size, every symbol (ref, value, footprint, position), nets, floating pins and ERC counts."""
+    async def schematic_summary(
+        ctx: RunContext[HarnessDeps], **_: Any
+    ) -> ToolReturn:
+        """The schematic: paper size, every symbol (ref, value, footprint, position), nets, floating pins and ERC counts.
+
+        Takes no arguments; any extra arguments are ignored.
+        """
         svc = ctx.deps.services
         ws = _ws(ctx)
         from kicad_harness.engine import kicad_cli
@@ -1250,12 +1255,12 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         return await _schematic_commit(ctx, "generate_schematic_skidl", f"Draw the schematic with skidl ({len(validated_parts)} parts)", payload)
 
     @agent.tool
-    async def check_schematic(ctx: RunContext[HarnessDeps]) -> ToolReturn:
+    async def check_schematic(ctx: RunContext[HarnessDeps], **_: Any) -> ToolReturn:
         """Run ERC on the working schematic and evaluate the goal against it."""
         return ToolReturn(return_value=await _evaluate(ctx), metadata=[_snapshot(ctx.deps.state)])
 
     @agent.tool(sequential=True)
-    async def start_board_layout(ctx: RunContext[HarnessDeps]) -> ToolReturn:
+    async def start_board_layout(ctx: RunContext[HarnessDeps], **_: Any) -> ToolReturn:
         """Finish the schematic and lay out its board: creates the board, places every footprint and
         assigns the nets KiCad's netlist gives, then switches the design to the board phase.
         Call this once the schematic is complete and ERC is clean."""

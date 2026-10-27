@@ -287,3 +287,32 @@ async def test_connect_pins_joins_the_pins_it_names(services, new_project):
     mid = next((nodes for name, nodes in netlist["nets"].items() if name.lstrip("/") == "MID"), [])
     members = {(ref, pin) for ref, pin in mid}
     assert members == {("R1", "2"), ("R2", "1")}, netlist["nets"]
+
+
+async def test_no_argument_tools_tolerate_stray_arguments(services, new_project):
+    """Regression: models send placeholders like {"_": null} to no-arg tools.
+
+    Rejecting them was a validation error, so the model retried the same call until the tool
+    retry cap blew and the whole run died with "exceeded max retries count of 5".
+    """
+    name, ws = new_project
+    script = Script(
+        [
+            [("schematic_summary", {"_": None})],
+            [("check_schematic", {})],
+            [("design_summary", {"junk": 1})],
+            "done",
+        ]
+    )
+    agent = build_agent()
+    deps = deps_for(services, name)
+    with agent.override(model=script.model()):
+        result = await agent.run("look at it", deps=deps)
+    assert result.output == "done"
+
+    returns = [
+        p for m in result.all_messages() for p in getattr(m, "parts", []) if type(p).__name__ == "ToolReturnPart"
+    ]
+    assert len(returns) == 3, [getattr(r, "tool_name", "") for r in returns]
+    # design_summary answers in the schematic phase instead of failing on the missing board.
+    assert all(isinstance(r.content, dict) for r in returns), returns
