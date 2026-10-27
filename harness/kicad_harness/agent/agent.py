@@ -204,40 +204,61 @@ def _split_pin(text: str) -> tuple[str, str]:
     return ref, number
 
 
-def _schematic(ctx: RunContext[HarnessDeps]):
-    """The working-copy schematic, loaded with the file's own libraries plus KiCad's.
+def _schematic(ctx: RunContext[HarnessDeps], want: str | None = None):
+    """The working-copy schematic, with the libraries it actually uses resolved.
 
-    Libraries are cached per process: KiCad ships ~200 ``.kicad_sym`` files and re-reading them
-    on every edit would dominate the latency of a tool call.
+    The file's own ``lib_symbols`` block comes first (that is what a saved schematic carries);
+    any library it references but does not embed is parsed on demand. Nothing is preloaded —
+    parsing all ~200 installed libraries takes over two minutes on a cold start.
     """
     from kicad_harness.engine.schematic import Schematic
 
     doc = Schematic.load(_ws(ctx).schematic_path)
-    for name, table in _kiCad_libraries(ctx).items():
-        doc.libraries.setdefault(name, table)
-        if not doc.libraries[name]:
+    needed = {lib for lib in (p.lib_id.split(":", 1)[0] for p in doc.placements()) if lib}
+    if want:
+        needed.add(want)
+    for name in needed:
+        if doc.libraries.get(name):
+            continue
+        table = _library(ctx, name)
+        if table:
             doc.libraries[name] = table
     return doc
 
 
 _KI_LIBRARIES: dict[str, dict] = {}
+_KI_LIBRARY_DIRS: list[Path] | None = None
 
 
 def _kiCad_libraries(ctx: RunContext[HarnessDeps]) -> dict[str, dict]:
-    """``{library: {symbol: LibrarySymbol}}`` for KiCad's installed symbol libraries."""
-    global _KI_LIBRARIES
-    if _KI_LIBRARIES:
-        return _KI_LIBRARIES
+    """``{library: {symbol: LibrarySymbol}}`` for KiCad's installed symbol libraries.
+
+    Parsing every installed library takes over two minutes on a cold start, so nothing is
+    preloaded: ``_library`` resolves one library on demand and caches it. Callers that need a
+    specific library ask for it by name.
+    """
+    global _KI_LIBRARY_DIRS
+    if _KI_LIBRARY_DIRS is None:
+        _KI_LIBRARY_DIRS = _symbol_libraries(ctx)
+    return _KI_LIBRARIES
+
+
+def _library(ctx: RunContext[HarnessDeps], name: str) -> dict:
+    """One symbol library by name (``Device``), parsed once and cached across runs."""
     from kicad_harness.engine.schematic import read_library
 
-    loaded: dict[str, dict] = {}
-    for path in _symbol_libraries(ctx):
-        try:
-            loaded[path.stem] = read_library(path)
-        except Exception:  # a broken library file must not block editing the schematic
-            continue
-    _KI_LIBRARIES = loaded
-    return loaded
+    _kiCad_libraries(ctx)
+    if name in _KI_LIBRARIES:
+        return _KI_LIBRARIES[name]
+    for path in _KI_LIBRARY_DIRS or []:
+        if path.stem == name:
+            try:
+                _KI_LIBRARIES[name] = read_library(path)
+            except Exception:  # a broken library must not block editing the schematic
+                _KI_LIBRARIES[name] = {}
+            return _KI_LIBRARIES[name]
+    _KI_LIBRARIES[name] = {}
+    return _KI_LIBRARIES[name]
 
 
 def _symbol_libraries(ctx: RunContext[HarnessDeps]) -> list[Path]:
@@ -285,15 +306,20 @@ async def _schematic_edit(
     tool: str,
     subject: str,
     work: Callable[[Any], Any],
+    want: str | None = None,
 ) -> ToolReturn:
-    """Apply ``work(doc)`` to the schematic, save it, and commit a version."""
+    """Apply ``work(doc)`` to the schematic, save it, and commit a version.
+
+    ``want`` names a symbol library the edit needs (e.g. "Device"); it is resolved and attached
+    to the document before ``work`` runs.
+    """
     ws = _ws(ctx)
     if ws.phase() != "schematic":
         return ToolReturn(
             return_value={"ok": False, "error": "this design is in the board phase; the schematic is final"}
         )
     try:
-        doc = await asyncio.to_thread(_schematic, ctx)
+        doc = await asyncio.to_thread(_schematic, ctx, want)
         result = await asyncio.to_thread(work, doc)
         await asyncio.to_thread(doc.save)
     except Exception as exc:  # engine/lib errors go back to the model as data, not retries
@@ -1117,9 +1143,17 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         footprint: str | None = None,
     ) -> ToolReturn:
         """Place a library symbol on the schematic (library:Name, e.g. "Device:R"), at (x, y) in mm with an optional rotation."""
+        # Resolve the requested library up front; it may not be one the file already uses.
+        lib_name = symbol.split(":", 1)[0] if ":" in symbol else ""
+        if lib_name and not _library(ctx, lib_name):
+            known = sorted(p.stem for p in (_KI_LIBRARY_DIRS or []))[:20]
+            raise ModelRetry(
+                f"no symbol library named {lib_name!r}. Installed libraries include: {', '.join(known)}"
+            )
         return await _schematic_edit(
             ctx, "add_symbol", f"Place {ref} ({symbol})",
             lambda d: d.add_symbol(symbol, ref, x, y, rotation=rotation, value=value, footprint=footprint),
+            want=lib_name or None,
         )
 
     @agent.tool(sequential=True)
