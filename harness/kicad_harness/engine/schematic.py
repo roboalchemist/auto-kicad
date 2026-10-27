@@ -1,0 +1,830 @@
+"""Schematic documents as KiCad S-expressions. See DESIGN.md, "Schematic".
+
+A design in the schematic phase has ``schematic.kicad_sch`` instead of a board. This module is
+the pure-Python model behind the agent's schematic tools: it reads and writes the file, places
+symbols from a ``.kicad_sym`` library, and connects them with wires, junctions and labels.
+
+It deliberately knows nothing about KiCad's Python bindings, so it runs in the harness venv and
+not only under KiCad's interpreter. ``kicad-cli`` remains the authority: every write is checked by
+rendering (``sch export svg``) and by ERC (``sch erc``) in ``engine/kicad_cli.py``.
+
+Coordinates are millimetres in KiCad schematic space: x right, **y down**.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Iterable, Sequence
+
+SCHEMATIC_VERSION = "20250114"
+GENERATOR = "kicad_harness"
+
+# KiCad's default paper sizes, in millimetres.
+PAPER: dict[str, tuple[float, float]] = {
+    "A4": (297.0, 210.0),
+    "A3": (420.0, 297.0),
+    "A2": (594.0, 420.0),
+    "A1": (841.0, 594.0),
+    "A0": (1189.0, 841.0),
+}
+
+class Q(str):
+    """A string KiCad always writes quoted (uuids, generator ids, lib ids, pages).
+
+    The writer quotes anything that needs it; subclassing ``str`` lets a node carry the
+    "always quote this" hint without changing the shape of the S-expression tree.
+    """
+
+
+# The grid KiCad snaps to; keeping every endpoint on it is what makes wires connect.
+GRID_MM = 1.27
+
+POWER_NETS = {"GND", "GNDA", "GNDD", "VCC", "VDD", "VSS", "+3V3", "+5V", "+12V", "-12V", "VBUS"}
+
+
+# ---------------------------------------------------------------------------------------------
+# S-expressions
+
+
+def parse(text: str) -> list:
+    """Parse KiCad S-expression ``text`` into nested lists of strings.
+
+    Returns the single root node, e.g. ``["kicad_sch", ["version", "20250114"], ...]``.
+    Quoted strings come back unescaped; every other token stays text, so numbers keep the
+    form KiCad wrote (callers convert what they need).
+    """
+    pos = _skip_ws(text, 0)
+    if pos >= len(text) or text[pos] != "(":
+        raise ValueError("schematic must start with '('")
+    node, pos = _parse_node(text, pos)
+    if _skip_ws(text, pos) < len(text):
+        raise ValueError("trailing data after the schematic expression")
+    return node
+
+
+def _skip_ws(text: str, pos: int) -> int:
+    while pos < len(text) and text[pos].isspace():
+        pos += 1
+    return pos
+
+
+def _parse_node(text: str, pos: int) -> tuple[list, int]:
+    """Parse one ``( ... )`` starting at ``pos``; returns the node and the position after it."""
+    assert text[pos] == "("
+    pos += 1
+    out: list = []
+    n = len(text)
+    while True:
+        pos = _skip_ws(text, pos)
+        if pos >= n:
+            raise ValueError("unbalanced '(' in schematic")
+        ch = text[pos]
+        if ch == ")":
+            return out, pos + 1
+        if ch == "(":
+            child, pos = _parse_node(text, pos)
+            out.append(child)
+        elif ch == '"':
+            value, pos = _parse_string(text, pos)
+            out.append(Q(value))
+        else:
+            start = pos
+            while pos < n and not text[pos].isspace() and text[pos] not in '()"':
+                pos += 1
+            out.append(text[start:pos])
+
+
+def _parse_string(text: str, pos: int) -> tuple[str, int]:
+    """Parse a quoted string starting at ``pos``, honouring backslash escapes."""
+    assert text[pos] == '"'
+    pos += 1
+    buf = []
+    n = len(text)
+    while pos < n:
+        ch = text[pos]
+        if ch == "\\" and pos + 1 < n:
+            buf.append(text[pos + 1])
+            pos += 2
+            continue
+        if ch == '"':
+            return "".join(buf), pos + 1
+        buf.append(ch)
+        pos += 1
+    raise ValueError("unterminated string in schematic")
+
+
+def dump(node: Any, indent: int = 0) -> str:
+    """Write a parsed S-expression back out, one child per line."""
+    pad = "  " * indent
+    if not isinstance(node, list):
+        return f"{pad}{quote(node)}"
+    if not node:
+        return f"{pad}()"
+    # Keep short, atomic lists on one line: (at 10 20 0), (size 1.27 1.27), (uuid "...").
+    simple = all(not isinstance(child, list) for child in node)
+    if simple:
+        return f"{pad}({' '.join(quote(c) for c in node)})"
+    head = node[0]
+    inner = "\n".join(dump(child, indent + 1) for child in node[1:])
+    return f"{pad}({quote(head)}\n{inner}\n{pad})"
+
+
+
+def write_top(node: list) -> str:
+    """Write a whole document: the root list keeps its own parentheses."""
+    return dump(node)
+
+
+
+_NEEDS_QUOTES = re.compile(r'[\s()"]')
+
+
+def quote(token: Any) -> str:
+    """Quote a token if KiCad requires it."""
+    if isinstance(token, Q):
+        return '"' + str(token).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    if not isinstance(token, str):
+        # Generated libraries contain "-0.0", which KiCad's tokenizer rejects.
+        if isinstance(token, float) and token == 0:
+            return "0"
+        token = str(token)
+    text = token
+    if token in ("-0.0", "-0"):
+        return "0"
+    if text and not _NEEDS_QUOTES.search(text):
+        return text
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def find_all(node: list, head: str) -> list[list]:
+    """Every direct child of ``node`` whose head is ``head``."""
+    return [c for c in node if isinstance(c, list) and c and _head(c[0]) == head]
+
+
+def find_one(node: list, head: str) -> list | None:
+    """The first direct child of ``node`` whose head is ``head``."""
+    for child in node:
+        if isinstance(child, list) and child and _head(child[0]) == head:
+            return child
+    return None
+
+
+def _head(token: Any) -> str:
+    """A node head, whitespace-normalised (generated libraries leave trailing spaces)."""
+    return "" if isinstance(token, list) else str(token).strip()
+
+
+def _clean(token: Any) -> str:
+    """A scalar node value, whitespace-normalised; ``""`` for a nested list."""
+    return "" if isinstance(token, list) else str(token).strip()
+
+
+def new_uuid() -> str:
+    return str(uuid.uuid4())
+
+
+def snap(value: float, grid: float = GRID_MM) -> float:
+    """Snap a coordinate to the schematic grid, rounded to avoid float noise."""
+    if grid <= 0:
+        return round(value, 6)
+    return round(round(value / grid) * grid, 6)
+
+
+def num(value: float) -> str:
+    """Format a number the way KiCad does: no trailing zeros, no exponent."""
+    text = f"{round(float(value), 6):.6f}".rstrip("0").rstrip(".")
+    return "0" if text in ("", "-0") else text
+
+
+# ---------------------------------------------------------------------------------------------
+# Symbol libraries
+
+
+@dataclass
+class LibraryPin:
+    """One pin of a library symbol, in symbol-local coordinates."""
+
+    number: str
+    name: str
+    x: float
+    y: float
+    angle: float = 0.0
+    length: float = 2.54
+    electrical: str = "unspecified"
+
+
+@dataclass
+class LibrarySymbol:
+    """A symbol from a ``.kicad_sym`` library, flattened out of its unit sub-symbols."""
+
+    name: str
+    lib_id: str
+    pins: dict[str, LibraryPin]
+    reference: str = "U"
+    value: str = ""
+    footprint: str = ""
+    body: list = field(default_factory=list)
+
+    @property
+    def pin_numbers(self) -> list[str]:
+        return list(self.pins)
+
+
+def read_library(path: str | Path) -> dict[str, LibrarySymbol]:
+    """Every symbol in a ``.kicad_sym`` file, keyed by name.
+
+    ``pins`` merges all unit sub-symbols (``NAME_0_1``, ``NAME_1_1``); symbols with several
+    units are not supported and report the union of their pins.
+    """
+    text = Path(path).read_text(encoding="utf-8")
+    tree = parse(text)
+    lib_name = Path(path).stem
+    out: dict[str, LibrarySymbol] = {}
+    for sym in find_all(tree, "symbol"):
+        if len(sym) < 2 or isinstance(sym[1], list):
+            continue
+        name = _clean(sym[1])
+        if not name:
+            continue
+        pins: dict[str, LibraryPin] = {}
+        reference, value, footprint = "U", name, ""
+        for prop in find_all(sym, "property"):
+            key = _clean(prop[1]) if len(prop) > 1 else ""
+            val = _clean(prop[2]) if len(prop) > 2 else ""
+            if key == "Reference":
+                reference = val or "U"
+            elif key == "Value":
+                value = val or name
+            elif key == "Footprint":
+                footprint = val
+        for unit in find_all(sym, "symbol"):
+            for pin in find_all(unit, "pin"):
+                at = find_one(pin, "at") or ["at", "0", "0", "0"]
+                number_node = find_one(pin, "number")
+                name_node = find_one(pin, "name")
+                length_node = find_one(pin, "length")
+                number = _clean(number_node[1]) if number_node and len(number_node) > 1 else ""
+                if not number:
+                    continue
+                pins[number] = LibraryPin(
+                    number=number,
+                    name=_clean(name_node[1]) if name_node and len(name_node) > 1 else number,
+                    x=float(at[1]) if len(at) > 1 else 0.0,
+                    y=float(at[2]) if len(at) > 2 else 0.0,
+                    angle=float(at[3]) if len(at) > 3 else 0.0,
+                    length=float(length_node[1]) if length_node and len(length_node) > 1 else 2.54,
+                    electrical=_clean(pin[1]) if len(pin) > 1 else "unspecified",
+                )
+        out[name] = LibrarySymbol(
+            name=name,
+            lib_id=f"{lib_name}:{name}",
+            pins=pins,
+            reference=reference,
+            value=value,
+            footprint=footprint,
+            body=sym,
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# Schematic document
+
+
+@dataclass
+class SymbolPlacement:
+    """One symbol instance on the sheet."""
+
+    lib_id: str
+    reference: str
+    value: str
+    x: float
+    y: float
+    rotation: float = 0.0
+    footprint: str = ""
+    uuid: str = field(default_factory=new_uuid)
+    properties: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class NetNode:
+    """A point where a pin, wire end, label or junction can connect."""
+
+    x: float
+    y: float
+
+    def key(self) -> tuple[float, float]:
+        return (snap(self.x), snap(self.y))
+
+
+@dataclass
+class Schematic:
+    """A ``.kicad_sch`` document that can be edited and written back.
+
+    Wires and labels are stored as their S-expression nodes; symbols and pins are resolved
+    through ``libraries``, which the caller loads once per edit session.
+    """
+
+    path: Path
+    tree: list
+    libraries: dict[str, dict[str, LibrarySymbol]] = field(default_factory=dict)
+
+    # -- lifecycle -------------------------------------------------------------------------
+
+    @classmethod
+    def load(cls, path: str | Path, libraries: dict[str, dict[str, LibrarySymbol]] | None = None) -> "Schematic":
+        """Read ``path``; raises ``FileNotFoundError`` if there is no schematic."""
+        path = Path(path)
+        if not path.is_file():
+            raise FileNotFoundError(f"no schematic at {path}")
+        tree = parse(path.read_text(encoding="utf-8"))
+        return cls(path=path, tree=tree, libraries=libraries or {})
+
+    @classmethod
+    def create(
+        cls, path: str | Path, paper: str = "A4", libraries: dict[str, dict[str, LibrarySymbol]] | None = None
+    ) -> "Schematic":
+        """Start an empty schematic and write it (see ``empty()`` for the in-memory form)."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(empty_schematic(paper), encoding="utf-8")
+        return cls.load(path, libraries)
+
+    def save(self) -> None:
+        """Write the document back, keeping a trailing newline."""
+        self.path.write_text(write_top(self.tree) + "\n", encoding="utf-8")
+
+    # -- queries ---------------------------------------------------------------------------
+
+    @property
+    def symbols(self) -> list[list]:
+        return find_all(self.tree, "symbol")
+
+    @property
+    def wires(self) -> list[list]:
+        return find_all(self.tree, "wire")
+
+    def placements(self) -> list[SymbolPlacement]:
+        """Every placed symbol, in sheet order."""
+        out = []
+        for sym in self.symbols:
+            lib_node = find_one(sym, "lib_id")
+            lib_id = _clean(lib_node[1]) if lib_node and len(lib_node) > 1 else ""
+            at = find_one(sym, "at") or ["at", "0", "0", "0"]
+            props: dict[str, str] = {}
+            for prop in find_all(sym, "property"):
+                if len(prop) > 2:
+                    props[_clean(prop[1])] = _clean(prop[2])
+            uw = find_one(sym, "uuid")
+            out.append(
+                SymbolPlacement(
+                    lib_id=lib_id,
+                    reference=props.get("Reference", "?"),
+                    value=props.get("Value", ""),
+                    x=float(at[1]),
+                    y=float(at[2]),
+                    rotation=float(at[3]) if len(at) > 3 else 0.0,
+                    footprint=props.get("Footprint", ""),
+                    uuid=str(uw[1]) if uw and len(uw) > 1 else "",
+                    properties=props,
+                )
+            )
+        return out
+
+    def lookup(self, lib_id: str) -> LibrarySymbol | None:
+        """The library symbol for ``lib_id`` (``lib:Name`` or a bare ``Name``)."""
+        if ":" in lib_id:
+            lib, name = lib_id.split(":", 1)
+            table = self.libraries.get(lib)
+            return table.get(name) if table else None
+        for table in self.libraries.values():
+            if lib_id in table:
+                return table[lib_id]
+        return None
+
+    def pin_position(self, placement: SymbolPlacement, number: str) -> tuple[float, float] | None:
+        """Absolute sheet position of a pin, using the placement's rotation.
+
+        KiCad rotates a symbol's pins about its origin; a pin at local ``(px, py)`` placed at
+        ``(x, y)`` with rotation ``r`` lands at ``(x + px*cos - py*sin, y + px*sin + py*cos)``
+        with screen-positive angles, which is what ``at`` stores.
+        """
+        symbol = self.lookup(placement.lib_id)
+        if symbol is None:
+            return None
+        pin = symbol.pins.get(_clean(number))
+        if pin is None:
+            return None
+        angle = math.radians(placement.rotation)
+        cos, sin = math.cos(angle), math.sin(angle)
+        return (
+            round(placement.x + pin.x * cos - pin.y * sin, 6),
+            round(placement.y + pin.x * sin + pin.y * cos, 6),
+        )
+
+    def pin_net(self, placement: SymbolPlacement, number: str) -> str | None:
+        """Net attached to a pin: from its adjacent label, or ``None`` if it floats."""
+        position = self.pin_position(placement, number)
+        if position is None:
+            return None
+        key = NetNode(*position).key()
+        for label in find_all(self.tree, "label") + find_all(self.tree, "global_label"):
+            at = find_one(label, "at")
+            if not at or len(at) < 3:
+                continue
+            if NetNode(float(at[1]), float(at[2])).key() == key:
+                return _clean(label[1]) if len(label) > 1 else None
+        for wire in self.wires:
+            pts = find_one(wire, "pts")
+            if not pts:
+                continue
+            xy = find_all(pts, "xy")
+            ends = {NetNode(float(p[1]), float(p[2])).key() for p in xy if len(p) > 2}
+            if key in ends:
+                return self.wire_net(wire)
+        return None
+
+    def wire_net(self, wire: list) -> str | None:
+        """The label attached to either end of ``wire``, if any."""
+        pts = find_one(wire, "pts")
+        if not pts:
+            return None
+        ends = {NetNode(float(p[1]), float(p[2])).key() for p in find_all(pts, "xy") if len(p) > 2}
+        for label in find_all(self.tree, "label") + find_all(self.tree, "global_label"):
+            at = find_one(label, "at")
+            if at and len(at) > 2 and NetNode(float(at[1]), float(at[2])).key() in ends:
+                return _clean(label[1]) if len(label) > 1 else None
+        return None
+
+    def nets(self) -> dict[str, list[dict[str, Any]]]:
+        """``{net: [{ref, pin, name}]}`` for every labelled connection on the sheet."""
+        out: dict[str, list[dict[str, Any]]] = {}
+        for placement in self.placements():
+            symbol = self.lookup(placement.lib_id)
+            if symbol is None:
+                continue
+            for number, pin in symbol.pins.items():
+                net = self.pin_net(placement, number)
+                if net:
+                    out.setdefault(net, []).append(
+                        {"ref": placement.reference, "pin": number, "name": pin.name}
+                    )
+        return out
+
+    def index(self) -> dict[str, Any]:
+        """A compact description of the sheet, for the agent and the UI."""
+        placements = self.placements()
+        nets = self.nets()
+        size = find_one(self.tree, "paper")
+        paper = _clean(size[1]) if size and len(size) > 1 else "A4"
+        return {
+            "paper": paper,
+            "sheet": list(PAPER.get(paper, PAPER["A4"])),
+            "symbols": [
+                {
+                    "reference": p.reference,
+                    "value": p.value,
+                    "lib_id": p.lib_id,
+                    "x": p.x,
+                    "y": p.y,
+                    "rotation": p.rotation,
+                    "footprint": p.footprint,
+                    "pins": list(self.lookup(p.lib_id).pins) if self.lookup(p.lib_id) else [],
+                }
+                for p in placements
+            ],
+            "wires": len(self.wires),
+            "labels": len(find_all(self.tree, "label")),
+            "global_labels": len(find_all(self.tree, "global_label")),
+            "nets": {name: members for name, members in sorted(nets.items())},
+            "unconnected_pins": self.unconnected_pins(),
+        }
+
+    def unconnected_pins(self) -> list[dict[str, str]]:
+        """Pins with no label and no wire — the ones ERC will complain about."""
+        out = []
+        for placement in self.placements():
+            symbol = self.lookup(placement.lib_id)
+            if symbol is None:
+                continue
+            for number in symbol.pins:
+                if self.pin_net(placement, number) is None:
+                    out.append({"ref": placement.reference, "pin": number})
+        return out
+
+    # -- edits -----------------------------------------------------------------------------
+
+    def add_symbol(
+        self,
+        lib_id: str,
+        reference: str,
+        x: float,
+        y: float,
+        rotation: float = 0.0,
+        value: str | None = None,
+        footprint: str | None = None,
+        properties: dict[str, str] | None = None,
+    ) -> SymbolPlacement:
+        """Place a library symbol. Raises ``ValueError`` if it isn't in a loaded library."""
+        symbol = self.lookup(lib_id)
+        if symbol is None:
+            known = sorted(name for table in self.libraries.values() for name in table)[:40]
+            raise ValueError(f"no symbol {lib_id!r} in the loaded libraries; available: {', '.join(known)}")
+        if any(p.reference == reference for p in self.placements()):
+            raise ValueError(f"reference {reference!r} is already placed")
+        placement = SymbolPlacement(
+            lib_id=symbol.lib_id,
+            reference=reference,
+            value=value if value is not None else symbol.value,
+            x=snap(x),
+            y=snap(y),
+            rotation=rotation,
+            footprint=footprint if footprint is not None else symbol.footprint,
+            properties=dict(properties or {}),
+        )
+        self._ensure_lib_symbol(symbol)
+        self._remove_top("symbol_instances")
+        node = [
+            "symbol",
+            ["lib_id", Q(placement.lib_id)],
+            ["at", num(placement.x), num(placement.y), num(placement.rotation)],
+            ["unit", "1"],
+            ["exclude_from_sim", "no"],
+            ["in_bom", "yes"],
+            ["on_board", "yes"],
+            ["dnp", "no"],
+            ["uuid", Q(placement.uuid)],
+            _instance_property(
+                "Reference", placement.reference, placement.x + 2.54, placement.y - 2.54
+            ),
+            _instance_property("Value", placement.value, placement.x + 2.54, placement.y),
+            _instance_property(
+                "Footprint", placement.footprint, placement.x, placement.y, hidden=True
+            ),
+            _instance_property("Datasheet", "", placement.x, placement.y, hidden=True),
+        ]
+        for key, val in placement.properties.items():
+            node.append(_instance_property(key, str(val), placement.x, placement.y, hidden=True))
+        # No per-pin (pin N (uuid ...)) entries: kicad-cli rejects them in this project's files,
+        # and they only assign UUIDs to pin instances, which nothing downstream needs.
+        self._insert_after_uuid(node)
+        return placement
+
+    def remove_symbol(self, reference: str) -> bool:
+        """Delete a placed symbol and any wires that end on its pins."""
+        target = next((p for p in self.placements() if p.reference == reference), None)
+        if target is None:
+            return False
+        ends = set()
+        for number in (self.lookup(target.lib_id).pins if self.lookup(target.lib_id) else {}):
+            position = self.pin_position(target, number)
+            if position:
+                ends.add(NetNode(*position).key())
+        self.tree[:] = [
+            child
+            for child in self.tree
+            if not (
+                isinstance(child, list)
+                and child
+                and child[0] == "symbol"
+                and find_one(child, "uuid")
+                and find_one(child, "uuid")[1] == target.uuid
+            )
+        ]
+        self.tree[:] = [c for c in self.tree if not self._wire_touches(c, ends)]
+        return True
+
+    def add_wire(self, points: Sequence[Sequence[float]], net: str | None = None) -> list[list]:
+        """Add a wire through ``points`` and, optionally, a local label on its first point.
+
+        KiCad stores one ``wire`` per straight segment, so a bent path becomes several wires
+        sharing endpoints. Returns the wire nodes.
+        """
+        if len(points) < 2:
+            raise ValueError("a wire needs at least two points")
+        coords = [(snap(x), snap(y)) for x, y in points]
+        nodes = []
+        for (x1, y1), (x2, y2) in zip(coords, coords[1:]):
+            if (x1, y1) == (x2, y2):
+                continue
+            node = [
+                "wire",
+                ["pts", ["xy", num(x1), num(y1)], ["xy", num(x2), num(y2)]],
+                ["stroke", ["width", "0"], ["type", "default"]],
+                ["uuid", Q(new_uuid())],
+            ]
+            self._insert_after_uuid(node)
+            nodes.append(node)
+        if not nodes:
+            raise ValueError("a wire needs two distinct points")
+        if net:
+            self.add_label(net, *coords[0], anchor="left")
+        return nodes
+
+    def add_label(self, name: str, x: float, y: float, anchor: str = "left", global_: bool = False) -> list:
+        """Add a local (or global) label at ``(x, y)``."""
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("a label needs a name")
+        node = [
+            "global_label" if global_ else "label",
+            name.strip(),
+            ["at", num(snap(x)), num(snap(y)), "0"],
+            ["fields_autoplaced", "yes"],
+            ["effects", ["font", ["size", "1.27", "1.27"]], ["justify", anchor]],
+            ["uuid", Q(new_uuid())],
+        ]
+        self._insert_after_uuid(node)
+        return node
+
+    def add_junction(self, x: float, y: float) -> list:
+        """Mark a T-connection where three or more wires meet."""
+        node = ["junction", ["at", num(snap(x)), num(snap(y))], ["diameter", "0"], ["color", "0", "0", "0", "0"], ["uuid", Q(new_uuid())]]
+        self._insert_after_uuid(node)
+        return node
+
+    def add_text(self, text: str, x: float, y: float, size: float = 1.27) -> list:
+        """Free text on the sheet (notes, not connections)."""
+        node = [
+            "text",
+            text,
+            ["at", num(snap(x)), num(snap(y)), "0"],
+            ["effects", ["font", ["size", num(size), num(size)]]],
+            ["uuid", Q(new_uuid())],
+        ]
+        self._insert_after_uuid(node)
+        return node
+
+    def connect_pins(
+        self, a: tuple[str, str | int], b: tuple[str, str | int], net: str | None = None
+    ) -> str:
+        """Wire pin ``a`` to pin ``b``, giving the connection a label.
+
+        When ``net`` is omitted the net is named after the pins (``U1.3-R1.1``). Both pins get
+        a label at their own position, which is what KiCad needs to see them joined even if the
+        drawn wire is later moved.
+        """
+        ref_a, pin_a = a
+        ref_b, pin_b = b
+        pa = self._placement(ref_a)
+        pb = self._placement(ref_b)
+        if pa is None or pb is None:
+            raise ValueError(f"no such symbol: {a if pa is None else b}")
+        p1 = self.pin_position(pa, str(pin_a))
+        p2 = self.pin_position(pb, str(pin_b))
+        if p1 is None or p2 is None:
+            raise ValueError(f"unknown pin: {a if p1 is None else b}")
+        name = net or f"{ref_a}.{pin_a}-{ref_b}.{pin_b}"
+        if abs(p1[1] - p2[1]) < 1e-6 or abs(p1[0] - p2[0]) < 1e-6:
+            self.add_wire([p1, p2])
+        else:
+            bend = (snap(p2[0]), snap(p1[1]))
+            self.add_wire([p1, bend])
+            self.add_wire([bend, p2])
+            self.add_junction(*bend)
+        self.add_label(name, p1[0], p1[1])
+        self.add_label(name, p2[0], p2[1])
+        return name
+
+    # -- internals -------------------------------------------------------------------------
+
+    def _placement(self, reference: str) -> SymbolPlacement | None:
+        return next((p for p in self.placements() if p.reference == reference), None)
+
+    def _wire_touches(self, child: Any, ends: set[tuple[float, float]]) -> bool:
+        if not (isinstance(child, list) and child and child[0] == "wire"):
+            return False
+        pts = find_one(child, "pts")
+        if not pts:
+            return False
+        return any(NetNode(float(p[1]), float(p[2])).key() in ends for p in find_all(pts, "xy") if len(p) > 2)
+
+    def _remove_top(self, head: str) -> None:
+        self.tree[:] = [c for c in self.tree if not (isinstance(c, list) and c and c[0] == head)]
+
+    def _insert_after_uuid(self, node: list) -> None:
+        """Insert a new top-level node after the header, before ``sheet_instances``."""
+        for i, child in enumerate(self.tree):
+            if isinstance(child, list) and child and child[0] == "sheet_instances":
+                self.tree.insert(i, node)
+                return
+        self.tree.append(node)
+
+    def _ensure_lib_symbol(self, symbol: LibrarySymbol) -> None:
+        """Copy a library symbol into ``lib_symbols`` if it isn't cached there yet."""
+        lib_block = find_one(self.tree, "lib_symbols")
+        if lib_block is None:
+            lib_block = ["lib_symbols"]
+            self._insert_after_uuid(lib_block)
+        full_name = symbol.lib_id
+        for existing in find_all(lib_block, "symbol"):
+            if len(existing) > 1 and existing[1] == full_name:
+                return
+        body = _rename_symbol(symbol.body, full_name)
+        lib_block.append(body)
+
+
+def _instance_property(name: str, value: str, x: float, y: float, hidden: bool = False) -> list:
+    """A placed symbol's property in the shape KiCad 10 writes it."""
+    effects = ["effects", ["font", ["size", "1.27", "1.27"]]]
+    if hidden:
+        effects.append("hide")
+    return ["property", Q(name), Q(str(value)), ["at", num(x), num(y), "0"], effects]
+
+
+def _rename_symbol(body: list, full_name: str) -> list:
+    """Give a library symbol its ``lib:Name`` id, keeping unit sub-symbols named ``Name_0_1``.
+
+    KiCad resolves a unit by stripping the ``lib:`` prefix off the parent id and looking for
+    ``Name_<unit>_<style>``, so the sub-symbols keep the short name.
+    """
+    short = full_name.split(":", 1)[-1]
+    out = list(body)
+    out[1] = Q(full_name)
+    for i, child in enumerate(out):
+        if isinstance(child, list) and child and child[0] == "symbol" and len(child) > 1:
+            renamed = list(child)
+            renamed[1] = Q(str(child[1]).split(":", 1)[-1])
+            out[i] = renamed
+    # KiCad 10 dropped numeric property ids; a stale ``(id N)`` makes eeschema refuse the file.
+    cleaned = []
+    for child in out:
+        if isinstance(child, list) and child:
+            if child[0] == "property":
+                child = [c for c in child if not (isinstance(c, list) and c and c[0] == "id")]
+                if len(child) > 1:
+                    child[1] = Q(str(child[1]))
+                if len(child) > 2:
+                    child[2] = Q(str(child[2]))
+            elif child[0] == "symbol":
+                child = _strip_property_ids(child)
+        cleaned.append(child)
+    return cleaned
+
+
+def _strip_property_ids(node: list) -> list:
+    out = []
+    for child in node:
+        if isinstance(child, list) and child:
+            if child[0] == "property":
+                child = [c for c in child if not (isinstance(c, list) and c and c[0] == "id")]
+                if len(child) > 1:
+                    child[1] = Q(str(child[1]))
+                if len(child) > 2:
+                    child[2] = Q(str(child[2]))
+            elif child[0] == "symbol":
+                child = _strip_property_ids(child)
+        out.append(child)
+    return out
+
+
+def empty_schematic(paper: str = "A4") -> str:
+    """The text of a new, empty schematic."""
+    if paper not in PAPER:
+        raise ValueError(f"unknown paper size {paper!r}: use one of {', '.join(PAPER)}")
+    tree = [
+        "kicad_sch",
+        ["version", SCHEMATIC_VERSION],
+        ["generator", Q(GENERATOR)],
+        ["generator_version", Q("10.0")],
+        ["uuid", Q(new_uuid())],
+        ["paper", Q(paper)],
+        ["lib_symbols"],
+        ["sheet_instances", ["path", Q("/"), ["page", Q("1")]]],
+    ]
+    return write_top(tree) + "\n"
+
+
+def board_netlist(schematic: Schematic) -> dict[str, Any]:
+    """Footprints and pad-to-net assignments implied by the schematic, for board seeding.
+
+    Returns ``{"components": [{ref, value, footprint, x, y}], "nets": {net: [{ref, pin}]}}``.
+    Symbols without a footprint are left out of ``components`` so layout can still start.
+    """
+    components = []
+    for placement in schematic.placements():
+        components.append(
+            {
+                "ref": placement.reference,
+                "value": placement.value,
+                "footprint": placement.footprint,
+                "x": placement.x,
+                "y": placement.y,
+            }
+        )
+    nets = {name: members for name, members in schematic.nets().items()}
+    return {"components": components, "nets": nets}
+
+
+def iter_pins(schematic: Schematic) -> Iterable[tuple[SymbolPlacement, str]]:
+    """Every (placement, pin number) pair on the sheet."""
+    for placement in schematic.placements():
+        symbol = schematic.lookup(placement.lib_id)
+        if symbol is None:
+            continue
+        for number in symbol.pins:
+            yield placement, number

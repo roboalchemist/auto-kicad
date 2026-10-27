@@ -30,8 +30,16 @@ if TYPE_CHECKING:
     from ..config import Config
 
 BOARD_FILE = "board.kicad_pcb"
+SCHEMATIC_FILE = "schematic.kicad_sch"
 GOAL_FILE = "goal.json"
-GITIGNORE = "*.kicad_prl\nfp-info-cache\n*-backups/\n~*.lck\n.history/\n"
+PROJECT_FILE = "project.json"
+GITIGNORE = "*.kicad_prl\nfp-info-cache\n*-backups/\n~*.lck\n.history/\nskidl/\n*_skidl.erc\n"
+
+# A design moves through phases: the agent draws the schematic first, then lays out the board
+# the schematic was netlisted into. See DESIGN.md, "Phases".
+PHASE_SCHEMATIC = "schematic"
+PHASE_BOARD = "board"
+PHASES = (PHASE_SCHEMATIC, PHASE_BOARD)
 DEFAULT_BRANCH = "main"
 WORKING = "working"  # file_at() revision meaning the working copy
 LOCK_FILE = "harness.lock"  # inside .git; flock'ed by the outermost holder of Workspace.lock
@@ -49,6 +57,23 @@ DEFAULT_GOAL: dict[str, Any] = {
         {"id": "review", "type": "open_threads", "severities": ["must_fix"], "max": 0},
     ],
     "budget": {"max_requests": 120, "max_minutes": 30},
+}
+
+# The schematic phase is judged before any board exists: the netlist has to be electrically
+# sane, and a board must actually have been laid out from it.
+DEFAULT_SCHEMATIC_GOAL: dict[str, Any] = {
+    "summary": "Draw a complete schematic for the brief with no ERC errors, then lay out the board.",
+    "criteria": [
+        {"id": "erc", "type": "erc_errors", "max": 0},
+        {"id": "board", "type": "board_laid_out", "min": 1},
+    ],
+    "budget": {"max_requests": 120, "max_minutes": 45},
+}
+
+DEFAULT_PROJECT: dict[str, Any] = {
+    "phase": PHASE_BOARD,
+    "brief": None,
+    "schematic_engine": None,
 }
 
 _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
@@ -345,6 +370,12 @@ def _dump_goal(goal: dict[str, Any]) -> str:
     return json.dumps(goal, indent=2, ensure_ascii=False) + "\n"
 
 
+def _check_phase(phase: str) -> str:
+    if phase not in PHASES:
+        raise ValueError(f"bad phase {phase!r}: use one of {', '.join(PHASES)}")
+    return phase
+
+
 # ---------------------------------------------------------------------------------------------
 # Workspace
 
@@ -420,11 +451,59 @@ class Workspace:
         return cls(config, name)
 
     @classmethod
-    def open(cls, config: Config, name: str) -> Workspace:
-        """Return the existing workspace ``name``; raises ``FileNotFoundError`` if there is none."""
-        if not cls.exists(config, name):
-            raise FileNotFoundError(f"no design named {name!r}")
+    def create_schematic(
+        cls,
+        config: Config,
+        name: str,
+        brief: str,
+        goal: dict[str, Any] | None = None,
+    ) -> Workspace:
+        """Create workspace ``name`` for a brand-new board described by ``brief``.
+
+        Nothing is drawn yet: the workspace starts in the schematic phase with an empty
+        ``schematic.kicad_sch``, a ``project.json`` carrying the brief, and the schematic-phase
+        goal, so the agent's first run draws the circuit from the description. The board phase
+        begins when ``begin_board_phase`` creates a board from the finished schematic.
+
+        Raises ``FileExistsError`` if the name is taken and ``ValueError`` for a bad name,
+        brief or goal.
+        """
+        _check_name(name)
+        if not isinstance(brief, str) or not brief.strip():
+            raise ValueError("a new project needs a prompt describing the board")
+        if goal is not None and not isinstance(goal, dict):
+            raise ValueError("goal must be a JSON object")
+        root = Path(config.workspaces)
+        root.mkdir(parents=True, exist_ok=True)
+        final = root / name
+        if final.exists():
+            raise FileExistsError(f"design {name!r} already exists")
+        staging = root / f".creating-{name}-{uuid.uuid4().hex[:8]}"
+        staging.mkdir()
+        try:
+            _git(staging, "init", "-q", "-b", DEFAULT_BRANCH, "--template=", str(staging), repo=False)
+            (staging / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
+            (staging / SCHEMATIC_FILE).write_text(empty_schematic(), encoding="utf-8")
+            project = dict(DEFAULT_PROJECT, phase=PHASE_SCHEMATIC, brief=brief.strip())
+            (staging / PROJECT_FILE).write_text(_dump_goal(project), encoding="utf-8")
+            goal_obj = DEFAULT_SCHEMATIC_GOAL if goal is None else dict(goal)
+            # The brief is the intent; keep it in the goal so the agent always sees it.
+            goal_obj.setdefault("summary", brief.strip())
+            (staging / GOAL_FILE).write_text(_dump_goal(goal_obj), encoding="utf-8")
+            _commit(staging, f"Start {name} from a prompt", "user")
+            try:
+                os.rename(staging, final)
+            except OSError as exc:
+                if final.exists():
+                    raise FileExistsError(f"design {name!r} already exists") from exc
+                raise
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
         return cls(config, name)
+
+    @classmethod
+    def open(cls, config: Config, name: str) -> Workspace:
 
     @classmethod
     def exists(cls, config: Config, name: str) -> bool:
