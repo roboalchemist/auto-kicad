@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field

@@ -166,3 +166,37 @@ async def test_schematic_edits_refused_after_the_board_exists(services, new_proj
     from kicad_harness.engine.schematic import Schematic
 
     assert Schematic.load(ws.schematic_path).placements() == []
+
+
+async def test_skidl_failure_returns_a_readable_error(services, new_project):
+    """A bad symbol must come back as tool data with suggestions, not crash the run."""
+    name, ws = new_project
+    script = Script(
+        [
+            [
+                (
+                    "generate_schematic_skidl",
+                    {
+                        "parts": [{"ref": "U1", "library": "Timer", "symbol": "NE555NOTREAL", "value": "x"}],
+                        "nets": [],
+                    },
+                )
+            ],
+            "done",
+        ]
+    )
+    agent = build_agent()
+    deps = deps_for(services, name)
+    with agent.override(model=script.model()):
+        result = await agent.run("try", deps=deps)
+    assert result.output == "done"
+
+    returns = [
+        p for m in result.all_messages() for p in getattr(m, "parts", []) if type(p).__name__ == "ToolReturnPart"
+    ]
+    errors = [r for r in returns if isinstance(r.content, dict) and r.content.get("ok") is False]
+    assert errors, returns
+    message = errors[0].content["error"]
+    assert "Unable to find part" in message
+    assert "NE555P" in message  # the suggestion the model needs to fix it
+    assert ws.phase() == "schematic"
