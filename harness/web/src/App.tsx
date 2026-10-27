@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AGENT_ID } from "./agent.ts";
 import { api } from "./api.ts";
 import { BoardViewer } from "./BoardViewer.tsx";
+import { SchematicViewer } from "./SchematicViewer.tsx";
 import { Header } from "./Header.tsx";
 import { asDesignState, useHarnessTools } from "./tools.tsx";
 import {
@@ -73,6 +74,11 @@ function Harness({ threadId, errors }: { threadId: string; errors: string[] }) {
   const { copilotkit } = useCopilotKit();
   const [tab, setTab] = useState<TabId>("agent");
   useHarnessTools();
+
+  // The agent owns the phase; the viewer follows it (schematic sheet until a board exists).
+  const phase = ((agent.state as { phase?: string } | undefined)?.phase ?? h.design?.phase ?? "board") as
+    | "schematic"
+    | "board";
 
   // ---- AG-UI state: register sinks so store actions write design/selection/viewing/loop/supervised
   // into the agent state that accompanies the next run.
@@ -240,7 +246,11 @@ function Harness({ threadId, errors }: { threadId: string; errors: string[] }) {
       <Header onToggleLoop={toggleLoop} onToggleSupervised={toggleSupervised} />
       <div className="harness-body">
         <section className="board-panel">
-          <BoardViewer onOpenThread={() => setTab("review")} />
+          {phase === "schematic" && h.designName ? (
+            <SchematicViewer design={h.designName} rev={h.rev} />
+          ) : (
+            <BoardViewer onOpenThread={() => setTab("review")} />
+          )}
         </section>
         <section className="side-panel">
           <div className="side-tabs">

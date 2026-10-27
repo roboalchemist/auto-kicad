@@ -9,9 +9,11 @@ import type {
   GoalEval,
   MeasureResult,
   ModelsResponse,
+  Phase,
   PickIndex,
   RunEvent,
   RunInfo,
+  SchematicInfo,
   SteerMessage,
   Thread,
   VersionInfo,
@@ -36,8 +38,22 @@ async function send<T>(path: string, method: string, body: unknown): Promise<T> 
 
 export const api = {
   designs: () => get<DesignInfo[]>("/api/designs"),
-  createDesign: (body: { name: string; board_text?: string; from_fixture?: boolean; goal?: Goal }) =>
-    send<{ name: string; branch: string; head: string }>("/api/designs", "POST", body),
+  createDesign: (body: {
+    name: string;
+    board_text?: string;
+    from_fixture?: boolean;
+    goal?: Goal;
+    prompt?: string;
+    autostart?: boolean;
+  }) =>
+    send<{ name: string; branch: string; head: string; phase?: Phase; brief?: string | null; autostart?: boolean }>(
+      "/api/designs",
+      "POST",
+      body,
+    ),
+  schematic: (d: string) => get<SchematicInfo>(`/api/designs/${d}/schematic`),
+  schematicSvgUrl: (d: string, rev = "working", sheet = 0) =>
+    `/api/designs/${d}/schematic.svg?rev=${encodeURIComponent(rev)}&sheet=${sheet}`,
   models: () => get<ModelsResponse>("/api/models"),
   stopRun: (d: string) => send<{ stopping: boolean }>(`/api/designs/${d}/stop`, "POST", {}),
   setModel: (model: string) => send<{ current: string }>("/api/models", "PUT", { model }),

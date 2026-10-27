@@ -1439,3 +1439,100 @@ button.stop-btn {
 .boundary-error b {
   font-weight: 620;
 }
+
+/* ---------------------------------------------------------------- schematic phase */
+.badge-error { background: var(--danger-soft); color: var(--danger-ink); }
+.badge-phase {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+  margin-left: 6px;
+}
+
+.schematic-view {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  grid-template-columns: 1fr 240px;
+  gap: 8px;
+  height: 100%;
+  padding: 8px;
+  min-height: 0;
+}
+.schematic-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.schematic-brief {
+  color: var(--text-soft);
+  max-width: 48ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.schematic-stats { font-size: 12px; }
+.schematic-sheet {
+  min-height: 0;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8px;
+}
+.schematic-sheet img {
+  max-width: 100%;
+  height: auto;
+  /* KiCad plots dark ink on transparent; keep the sheet white like eeschema. */
+  background: #fff;
+}
+.schematic-side {
+  overflow: auto;
+  font-size: 12px;
+  border-left: 1px solid var(--border);
+  padding-left: 10px;
+}
+.schematic-nets {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0;
+  display: grid;
+  gap: 4px;
+}
+.schematic-nets li { display: flex; flex-direction: column; }
+.schematic-floating { word-break: break-word; }
+
+.new-project-modes { display: flex; gap: 6px; width: 100%; }
+.mode-pill {
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-soft);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mode-pill.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+  font-weight: 600;
+}
+.new-project-prompt {
+  width: 100%;
+  resize: vertical;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 6px;
+  font: inherit;
+  line-height: 1.45;
+}
+.new-project-hint { font-size: 12px; line-height: 1.4; }

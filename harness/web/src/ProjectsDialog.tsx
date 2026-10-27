@@ -25,6 +25,9 @@ export function ProjectsDialog({ onClose }: { onClose: () => void }) {
   const [fileName, setFileName] = useState<string | null>(null);
   const [useFixture, setUseFixture] = useState(true);
   const [creating, setCreating] = useState(false);
+  /** "prompt" describes a new board; "board" starts from a .kicad_pcb or the demo board. */
+  const [mode, setMode] = useState<"prompt" | "board">("prompt");
+  const [prompt, setPrompt] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const load = () => api.designs().then(setItems).catch((e) => setError(String(e)));
@@ -47,9 +50,18 @@ export function ProjectsDialog({ onClose }: { onClose: () => void }) {
 
   const create = async () => {
     if (!name.trim()) return;
+    if (mode === "prompt" && !prompt.trim()) return;
     setCreating(true);
     setError(null);
     try {
+      if (mode === "prompt") {
+        // A described board starts in the schematic phase; the agent draws it from the text.
+        await api.createDesign({ name: name.trim(), prompt: prompt.trim(), autostart: true });
+        await refreshDesigns();
+        await selectDesign(name.trim());
+        onClose();
+        return;
+      }
       const goal: Goal | undefined = summary.trim()
         ? {
             summary: summary.trim(),
@@ -73,6 +85,18 @@ export function ProjectsDialog({ onClose }: { onClose: () => void }) {
     } finally {
       setCreating(false);
     }
+  };
+
+  /** Turn a pasted idea into a usable project name (a few meaningful words). */
+  const nameFromPrompt = () => {
+    if (name.trim() || !prompt.trim()) return;
+    const words = prompt
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !["the", "and", "with", "for", "that", "from", "board", "circuit"].includes(w))
+      .slice(0, 4);
+    if (words.length) setName(words.join("-").slice(0, 40));
   };
 
   return (
@@ -102,11 +126,14 @@ export function ProjectsDialog({ onClose }: { onClose: () => void }) {
                 <span className="project-thumb empty" />
               )}
               <span className="project-meta">
-                <b>{d.name}</b>
+                <b>
+                  {d.name}
+                  {d.phase === "schematic" && <span className="badge badge-phase">schematic</span>}
+                </b>
                 <span className="muted">
                   {d.branch} @ {(d.head ?? "").slice(0, 8) || "—"} · {ago(d.updated_at)}
                 </span>
-                <span className="project-subject">{d.latest?.subject ?? "no versions yet"}</span>
+                <span className="project-subject">{d.brief ?? d.latest?.subject ?? "no versions yet"}</span>
                 {d.goal_summary && <span className="project-goal">{d.goal_summary}</span>}
               </span>
               {d.name === h.designName && <span className="badge badge-ok">current</span>}
@@ -117,39 +144,83 @@ export function ProjectsDialog({ onClose }: { onClose: () => void }) {
         <div className="project-new">
           <div className="section-title">New project</div>
           <div className="project-form">
+            <div className="new-project-modes" data-testid="new-project-modes">
+              <button
+                className={`mode-pill ${mode === "prompt" ? "active" : ""}`}
+                data-testid="new-project-mode-prompt"
+                onClick={() => setMode("prompt")}
+              >
+                describe a board
+              </button>
+              <button
+                className={`mode-pill ${mode === "board" ? "active" : ""}`}
+                data-testid="new-project-mode-board"
+                onClick={() => setMode("board")}
+              >
+                import a board
+              </button>
+            </div>
+
             <input
               data-testid="new-project-name"
               placeholder="project name"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
-            <input
-              data-testid="new-project-goal"
-              placeholder="goal summary (optional)"
-              value={summary}
-              onChange={(e) => setSummary(e.target.value)}
-            />
-            <label className="toggle">
-              <input type="checkbox" checked={useFixture} onChange={(e) => setUseFixture(e.target.checked)} />
-              start from the demo board
-            </label>
-            <button className="secondary" onClick={() => fileRef.current?.click()} data-testid="new-project-file">
-              {fileName ? `board: ${fileName}` : "upload .kicad_pcb…"}
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".kicad_pcb"
-              style={{ display: "none" }}
-              onChange={(e) => void pickFile(e.target.files?.[0] ?? null)}
-            />
+
+            {mode === "prompt" ? (
+              <>
+                <textarea
+                  className="new-project-prompt"
+                  data-testid="new-project-prompt"
+                  data-1p-ignore
+                  rows={7}
+                  placeholder={
+                    "What are you building?\n\n" +
+                    "e.g. A 555 astable LED blinker on a 5 V supply: NE555, R1 10k, R2 47k, C1 10 µF, " +
+                    "C2 10 nF, one red 0805 LED with a 470 Ω series resistor. Single-sided if possible, 25 × 20 mm."
+                  }
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  onBlur={nameFromPrompt}
+                />
+                <div className="muted new-project-hint">
+                  The agent draws the schematic from your description, checks it with ERC, then lays out the
+                  board from the finished netlist.
+                </div>
+              </>
+            ) : (
+              <>
+                <input
+                  data-testid="new-project-goal"
+                  placeholder="goal summary (optional)"
+                  value={summary}
+                  onChange={(e) => setSummary(e.target.value)}
+                />
+                <label className="toggle">
+                  <input type="checkbox" checked={useFixture} onChange={(e) => setUseFixture(e.target.checked)} />
+                  start from the demo board
+                </label>
+                <button className="secondary" onClick={() => fileRef.current?.click()} data-testid="new-project-file">
+                  {fileName ? `board: ${fileName}` : "upload .kicad_pcb…"}
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".kicad_pcb"
+                  style={{ display: "none" }}
+                  onChange={(e) => void pickFile(e.target.files?.[0] ?? null)}
+                />
+              </>
+            )}
+
             <button
               className="run-goal-btn"
               data-testid="new-project-create"
-              disabled={!name.trim() || creating}
+              disabled={!name.trim() || creating || (mode === "prompt" && !prompt.trim())}
               onClick={() => void create()}
             >
-              {creating ? "creating…" : "Create project"}
+              {creating ? "creating…" : mode === "prompt" ? "Create and start drawing" : "Create project"}
             </button>
           </div>
           {error && (

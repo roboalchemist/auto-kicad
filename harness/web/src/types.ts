@@ -1,5 +1,8 @@
 /** Shapes returned by the harness REST API (see DESIGN.md, "Server"). */
 
+/** A design moves through phases: the schematic is drawn first, then the board. */
+export type Phase = "schematic" | "board";
+
 export interface DesignInfo {
   name: string;
   branch: string;
@@ -9,6 +12,35 @@ export interface DesignInfo {
   latest?: { sha: string; short: string; subject: string } | null;
   thumbnail?: string | null;
   goal_summary?: string | null;
+  phase?: Phase;
+  brief?: string | null;
+}
+
+/** One symbol on the schematic. */
+export interface SchematicSymbol {
+  reference: string;
+  value: string;
+  lib_id: string;
+  x: number;
+  y: number;
+  rotation: number;
+  footprint: string;
+  pins: string[];
+}
+
+/** The schematic as the API describes it. */
+export interface SchematicInfo {
+  phase: Phase;
+  brief: string | null;
+  paper: string;
+  sheet: [number, number];
+  symbols: SchematicSymbol[];
+  wires: number;
+  labels: number;
+  global_labels: number;
+  nets: Record<string, { ref: string; pin: string; name: string }[]>;
+  unconnected_pins: { ref: string; pin: string }[];
+  erc: { counts: { errors?: number | null; warnings?: number | null }; violations?: unknown[]; error?: string };
 }
 
 /** The project list returns a short goal summary string. */
@@ -44,7 +76,10 @@ export interface VersionSummary {
 export interface DesignDetail extends DesignInfo {
   dirty: boolean;
   goal: Goal;
-  board_hash: string;
+  board_hash: string | null;
+  phase?: Phase;
+  brief?: string | null;
+  schematic_hash?: string | null;
   summary: {
     drc: { errors?: number; warnings?: number; unconnected?: number };
     size: [number, number];
@@ -197,6 +232,7 @@ export interface Thread {
 }
 
 export interface VersionInfo {
+  phase?: Phase;
   sha: string;
   short: string;
   message: string;
