@@ -348,6 +348,8 @@ def create_app() -> FastAPI:
                 "branch": ws.branch(),
                 "head": head,
                 "dirty": ws.dirty(),
+                "phase": ws.phase(),
+                "brief": ws.brief(),
                 "updated_at": (latest or {}).get("time"),
                 "latest": {
                     "sha": latest["sha"],
@@ -380,6 +382,21 @@ def create_app() -> FastAPI:
                 goals.validate_goal(goal)
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from exc
+
+        # A prompt starts a schematic-first project: nothing is drawn yet, and the agent's
+        # first run draws the circuit from the description.
+        prompt = body.get("prompt") or body.get("brief")
+        if prompt is not None:
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise HTTPException(400, "prompt must describe the board")
+            try:
+                ws = await asyncio.to_thread(Workspace.create_schematic, svc.config, name, prompt, goal)
+            except FileExistsError as exc:
+                raise HTTPException(409, str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            return {"name": name, "branch": ws.branch(), "head": ws.head(), "phase": ws.phase(),
+                    "brief": ws.brief(), "autostart": bool(body.get("autostart", True))}
 
         # Three ways in: a browser upload (board_text), the bundled demo fixture, or a path.
         src: Path | None = None
@@ -415,16 +432,88 @@ def create_app() -> FastAPI:
     async def get_design(request: Request, design: str):
         svc = _svc(request)
         ws = _workspace(svc, design)
+        if ws.phase() == "schematic":
+            # No board yet: the viewer shows the schematic instead of a board summary.
+            from kicad_harness.engine.schematic import Schematic
+
+            doc = await asyncio.to_thread(Schematic.load, ws.schematic_path)
+            return {
+                "name": design, "branch": ws.branch(), "head": ws.head(), "dirty": ws.dirty(),
+                "goal": ws.goal(), "phase": "schematic", "brief": ws.brief(),
+                "board_hash": None,
+                "schematic_hash": await asyncio.to_thread(
+                    lambda: __import__("hashlib").sha256(ws.schematic_path.read_bytes()).hexdigest()[:16]
+                ),
+                "summary": {"drc": {}, "size": [0.0, 0.0],
+                            "components": len([s for s in doc.index()["symbols"]])},
+            }
         board_hash = await _rev_hash(svc, ws, "working")
         index = await asyncio.to_thread(svc.artifacts.index, board_hash)
         drc = await asyncio.to_thread(svc.artifacts.drc, board_hash)
         _, _, w, h = index["board"]["edge_bbox"]
         return {
             "name": design, "branch": ws.branch(), "head": ws.head(), "dirty": ws.dirty(), "goal": ws.goal(),
+            "phase": ws.phase(), "brief": ws.brief(),
             "board_hash": board_hash,
             "summary": {"drc": drc.get("counts", {}), "size": [round(w, 3), round(h, 3)],
                         "components": len(index.get("footprints", []))},
         }
+
+    # ------------------------------------------------------------------ schematic (phase)
+
+    @app.get("/api/designs/{design}/schematic")
+    async def schematic_index(request: Request, design: str):
+        """Symbols, nets, floating pins and ERC for the working-copy schematic."""
+        from kicad_harness.engine import kicad_cli
+        from kicad_harness.engine.schematic import Schematic
+
+        svc = _svc(request)
+        ws = _workspace(svc, design)
+        path = ws.schematic_path
+        if not path.is_file():
+            raise HTTPException(404, "this design has no schematic")
+        doc = await asyncio.to_thread(Schematic.load, path)
+        try:
+            erc = await asyncio.to_thread(kicad_cli.erc, path, config=svc.config)
+        except Exception as exc:  # ERC is advisory here; the viewer still renders
+            erc = {"counts": {}, "violations": [], "error": str(exc)}
+        return {"phase": ws.phase(), "brief": ws.brief(), **doc.index(), "erc": erc}
+
+    @app.get("/api/designs/{design}/schematic.svg")
+    async def schematic_svg(request: Request, design: str, rev: str = "working", sheet: int = 0):
+        """The schematic plotted to SVG (per sheet), cached under its content hash."""
+        from kicad_harness.engine import kicad_cli
+        from kicad_harness.engine.artifacts import board_hash as content_hash
+
+        svc = _svc(request)
+        ws = _workspace(svc, design)
+        try:
+            data = await asyncio.to_thread(ws.file_at, rev, "schematic.kicad_sch")
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "no schematic at that revision") from exc
+        digest = content_hash(data)
+        out_dir = Path(svc.config.cache) / "schematic" / digest
+        plots = sorted(out_dir.glob("*.svg")) if out_dir.is_dir() else []
+
+        def plot() -> list[Path]:
+            src = out_dir.parent / f"{digest}.kicad_sch"
+            src.parent.mkdir(parents=True, exist_ok=True)
+            src.write_bytes(data)
+            try:
+                return kicad_cli.export_sch_svg(src, out_dir, config=svc.config)
+            finally:
+                src.unlink(missing_ok=True)
+
+        if not plots:
+            try:
+                plots = await asyncio.to_thread(plot)
+            except Exception as exc:
+                raise HTTPException(500, f"could not plot the schematic: {exc}") from exc
+        if not plots:
+            raise HTTPException(404, "the schematic plotted to nothing")
+        chosen = min(max(sheet, 0), len(plots) - 1)
+        return Response(content=plots[chosen].read_bytes(), media_type="image/svg+xml",
+                        headers={"Cache-Control": "max-age=3600"})
 
     # ------------------------------------------------------------------ versions
 
@@ -433,12 +522,23 @@ def create_app() -> FastAPI:
         svc = _svc(request)
         ws = _workspace(svc, design)
         out = []
+        phase = ws.phase()
         for v in ws.log(branch=branch, limit=limit):
             v = _as_dict(v)
             meta = svc.store.versions.get(design, v["sha"])
-            v["thumbnail"] = f"/api/designs/{design}/rev/{v['sha']}/svg/front"
+            v["thumbnail"] = (
+                f"/api/designs/{design}/schematic.svg?rev={v['sha']}"
+                if phase == "schematic"
+                else f"/api/designs/{design}/rev/{v['sha']}/svg/front"
+            )
+            v["phase"] = phase
             parents = v.get("parents") or []
             v["parent"] = parents[0] if parents else None
+            if phase == "schematic":
+                # No board to measure or diff in this phase: the schematic plot is the preview.
+                v.update(board_hash=None, metrics=None)
+                out.append(v)
+                continue
             if meta:
                 v.update(board_hash=meta.get("board_hash"), metrics=meta.get("metrics"),
                          summary=meta.get("summary"), diff=meta.get("diff"))
