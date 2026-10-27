@@ -96,7 +96,16 @@ async def test_agent_draws_and_then_hands_off_to_layout(services, new_project):
     assert result.output == "done"
 
     # The schematic holds every part, and the board came from it.
-    assert ws.phase() == "board"
+    returns = [
+        p
+        for m in result.all_messages()
+        for p in getattr(m, "parts", [])
+        if type(p).__name__ in ("ToolReturnPart", "RetryPromptPart")
+    ]
+    detail = [
+        (getattr(p, "tool_name", ""), str(getattr(p, "content", ""))[:300]) for p in returns
+    ]
+    assert ws.phase() == "board", detail
     assert ws.board_path.is_file()
     from kicad_harness.engine.schematic import Schematic
 
