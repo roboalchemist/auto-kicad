@@ -316,3 +316,28 @@ async def test_no_argument_tools_tolerate_stray_arguments(services, new_project)
     assert len(returns) == 3, [getattr(r, "tool_name", "") for r in returns]
     # design_summary answers in the schematic phase instead of failing on the missing board.
     assert all(isinstance(r.content, dict) for r in returns), returns
+
+
+async def test_sse_probes_are_shared_between_subscribers():
+    """Many open tabs must not multiply live-state probes (they starved the tool thread pool)."""
+    import asyncio
+    import time
+
+    from kicad_harness.server import SseFanout
+
+    calls = {"n": 0}
+
+    def probe() -> dict:
+        calls["n"] += 1
+        return {"n": calls["n"]}
+
+    fan = SseFanout(ttl=0.4)
+
+    async def client() -> None:
+        for _ in range(5):
+            await fan.get("design", probe)
+            await asyncio.sleep(0.4)
+
+    await asyncio.gather(*[client() for _ in range(6)])
+    # 6 subscribers x 5 polls = 30 requests; sharing keeps it near one per ttl window.
+    assert calls["n"] < 12, f"{calls['n']} probes executed for 30 subscriber polls"

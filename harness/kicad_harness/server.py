@@ -10,8 +10,10 @@ import json
 import re
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Request
@@ -57,6 +59,39 @@ def _as_dict(obj: Any) -> dict:
     import dataclasses
 
     return dataclasses.asdict(obj)
+
+
+class SseFanout:
+    """Share live-state probes between the SSE streams of one design.
+
+    Every open browser tab keeps an EventSource that polls twice a second. Running that probe
+    per subscriber put several polls per second into the *default* asyncio thread pool, which is
+    also where tool execution runs (``asyncio.to_thread(engine.call, ...)``) — so a busy UI
+    starved the agent and tools stalled for minutes. This caches one result per design per
+    ``ttl`` and runs it on a dedicated executor, so polls can never occupy the pool tools need.
+    """
+
+    def __init__(self, ttl: float = 0.5, workers: int = 2) -> None:
+        self.ttl = ttl
+        self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="sse-probe")
+        self._entries: dict[str, tuple[float, dict]] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    async def get(self, key: str, probe: Callable[[], dict], _svc: Any = None) -> dict:
+        """The latest probe result for ``key``, running ``probe`` at most once per ``ttl``."""
+        cached = self._entries.get(key)
+        if cached and time.monotonic() - cached[0] < self.ttl:
+            return cached[1]
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            # Another subscriber may have refreshed while we waited for the lock.
+            cached = self._entries.get(key)
+            if cached and time.monotonic() - cached[0] < self.ttl:
+                return cached[1]
+            loop = asyncio.get_running_loop()
+            value = await loop.run_in_executor(self._executor, probe)
+            self._entries[key] = (time.monotonic(), value)
+            return value
 
 
 async def _rev_hash(svc: Services, ws, rev: str) -> str:
@@ -204,6 +239,8 @@ class AgentHost:
 async def lifespan(app: FastAPI):
     svc = Services.create()
     app.state.services = svc
+    # One shared probe cache so open tabs can't starve the thread pool tools run on.
+    app.state.sse_fanout = SseFanout()
     # A model chosen in the UI survives restarts.
     stored_model = svc.store.get_setting("model")
     if stored_model:
@@ -895,11 +932,13 @@ def create_app() -> FastAPI:
             }
 
         async def stream():
+            # Polls are shared per design (see _sse_fanout) so N open tabs cost one probe, not N,
+            # and they never queue behind tool calls in the default thread pool.
             last: dict | None = None
             last_beat = time.monotonic()
             while not await request.is_disconnected():
                 try:
-                    now = await asyncio.to_thread(probe)
+                    now = await request.app.state.sse_fanout.get(design, probe, svc)
                 except Exception:  # workspace mid-write; try again next tick
                     now = last
                 if now is not None and last is not None:
