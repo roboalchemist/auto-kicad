@@ -263,7 +263,11 @@ async def _run(name, prompt, loop, model, supervised, thread_id, color) -> int:
 
 def _eval_inputs(svc, ws, name):
     board_hash, _ = svc.artifacts.materialize(ws.board_path.read_bytes())
-    return svc.artifacts.index(board_hash), svc.artifacts.drc(board_hash), svc.store.review.list(name)
+    drc = svc.artifacts.drc(board_hash)
+    # A board exists here, so board_laid_out holds; without this a goal written in the schematic
+    # phase can never pass and the loop reports it as unmet after doing the work.
+    drc = {**drc, "board_laid_out": ws.board_path.is_file()}
+    return svc.artifacts.index(board_hash), drc, svc.store.review.list(name)
 
 
 class _Printer:

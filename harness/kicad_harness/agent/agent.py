@@ -201,6 +201,9 @@ async def _evaluate(ctx: RunContext[HarnessDeps]) -> dict:
         return evaluation
     board_hash, index = await _working(ctx)
     drc = await asyncio.to_thread(svc.artifacts.drc, board_hash)
+    # Once there is a board, board_laid_out is satisfied by its existence — otherwise a goal
+    # written during the schematic phase could never pass and the loop would never finish.
+    drc = {**drc, "board_laid_out": ws.board_path.is_file()}
     evaluation = goals.evaluate(ws.goal(), index, drc, threads)
     ctx.deps.state.goal = GoalStatus.model_validate(evaluation)
     return evaluation

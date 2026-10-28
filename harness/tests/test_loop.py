@@ -105,3 +105,40 @@ async def test_board_tools_refuse_with_data_not_retries(services, new_project):
         assert isinstance(r.content, dict), r.content
         assert r.content.get("ok") is False, r.content
         assert "schematic phase" in r.content.get("error", ""), r.content
+
+
+async def test_board_laid_out_passes_once_the_board_exists(services, new_project):
+    """Regression: a goal written in the schematic phase reported [board] unmet forever.
+
+    The board_laid_out term was only supplied while still in the schematic phase, so after the
+    handoff the criterion could never pass and the loop finished as "Goal NOT MET" despite
+    having produced a board.
+    """
+    from kicad_harness.agent import goal as goals
+
+    name, ws = new_project
+    ws.set_goal(
+        {
+            "summary": "wired, clean, laid out",
+            "criteria": [
+                {"id": "wired", "type": "unconnected_pins", "max": 0},
+                {"id": "board", "type": "board_laid_out", "min": 1},
+            ],
+        }
+    )
+    ws.set_phase("board")
+    ws.board_path.write_bytes(
+        __import__("pathlib").Path(__file__).parent.joinpath("fixtures", "blinker.kicad_pcb").read_bytes()
+    )
+
+    run_deps = deps_for(services, name)
+    from kicad_harness.agent.agent import _evaluate
+
+    class Ctx:
+        deps = run_deps
+        tool_call_id = None
+        tool_call_approved = False
+
+    evaluation = await _evaluate(Ctx())
+    board = next(c for c in evaluation["criteria"] if c["id"] == "board")
+    assert board["passed"] is True, evaluation
