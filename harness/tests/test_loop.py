@@ -205,3 +205,14 @@ def test_next_budget_moves_in_the_right_direction():
     assert next_budget(4096, credit) is None               # already at the floor
 
     assert next_budget(16000, RuntimeError("something else broke")) is None
+
+
+def test_cli_exposes_run_and_goals():
+    """Smoke the CLI surface: a missing import inside the run loop killed a cold-start run."""
+    from typer.testing import CliRunner
+
+    from kicad_harness.cli import app
+
+    result = CliRunner().invoke(app, ["run", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--loop" in result.output

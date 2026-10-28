@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from pydantic_ai.settings import ModelSettings
 
 app = typer.Typer(help="Agent harness for KiCad boards: headless runs, versions, review threads, and the API server.")
 
