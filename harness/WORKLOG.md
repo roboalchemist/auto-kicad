@@ -50,3 +50,30 @@ won. Two lessons:
 
 `engine/seed.py` places footprints on a grid and assigns pad nets from that netlist. A missing
 footprint is reported per part instead of aborting the whole board.
+
+## Why the goal loop died (and how each is fixed)
+
+Every one of these ended a live run. Each is now covered by a test in `tests/test_loop.py`.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| "Model token limit (16000) exceeded before any response" | A reasoning model spent the whole completion budget on thinking and returned `finish_reason=length` with no output | `max_tokens` default 20000 (configurable), thinking `low`, and `next_budget()` adapts up to 64000 |
+| 402 "can only afford 25411 tokens" | Raising the budget past the provider's key limit | `next_budget()` also *shrinks* the budget when the provider rejects it |
+| "Tool 'schematic_summary' exceeded max retries count of 5" | Models send `{"_": null}` to no-argument tools; extra args were a validation error, retried 5x | No-arg tools accept `**kwargs`; refusals return `ok:false` data instead of `ModelRetry` |
+| A tool appeared hung for minutes | (a) SSE polling twice a second per tab shared the thread pool tools run on; (b) every schematic tool parsed ~200 symbol libraries on first use | `SseFanout` shares one probe per design; libraries load on demand (137s -> 0.74s) |
+| "Goal NOT MET" after doing all the work | `board_laid_out` was supplied only in the schematic phase, so it never passed once a board existed — in four call sites | `goals.with_board_state()` is the single source |
+| Schematic had 0 wires | A netless `generate_schematic_skidl` overwrote the sheet, discarding wiring | Refuses netless generation and restores the previous file |
+| Wrong pins joined / shorts | Library symbol y is +up, sheet y is +down; pin positions skipped the sign flip | Negate the local pin y; verified against `kicad-cli` |
+| Wires read as unconnected | `pin_net` stopped at the first touching wire, and missed pins meeting a power symbol | Follows the whole chain; `unconnected_pins` uses the connectivity graph |
+
+## Cold-start evidence
+
+`coldstart-rc5`, service freshly restarted, headless `kicad-harness run --loop` on `bifrost:deepseek-flash-latest`:
+
+- 140 tool calls, 32 versions, **no failed/retried model calls**
+- schematic: 18 wires, 0 floating pins, 0 ERC errors
+- board: 16 x 10 mm, 0 DRC errors, 0 unconnected
+- `Goal MET`
+
+Then `midstream`: killed ~55s in (12 versions committed), resumed with `--thread` and finished
+`Goal MET` (0 ERC, 0 DRC, 0 unconnected). Interruption loses no work because every edit is a commit.
