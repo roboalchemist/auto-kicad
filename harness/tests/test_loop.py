@@ -142,3 +142,66 @@ async def test_board_laid_out_passes_once_the_board_exists(services, new_project
     evaluation = await _evaluate(Ctx())
     board = next(c for c in evaluation["criteria"] if c["id"] == "board")
     assert board["passed"] is True, evaluation
+
+
+async def test_budget_shrinks_when_the_provider_rejects_it():
+    """Regression: raising max_tokens hit a 402 "can only afford 25411 tokens".
+
+    A fixed large budget can exceed the account's credit limit, so the retry must also be able
+    to *reduce* the budget, not just raise it.
+    """
+    seen: list[int] = []
+
+    def make_stream(budget: int):
+        seen.append(budget)
+
+        async def gen():
+            if len(seen) == 1:
+                raise RuntimeError(
+                    "status_code: 402 ... This request requires more credits, or fewer max_tokens. "
+                    "You requested up to 32000 tokens, but can only afford 25411."
+                )
+            yield {"type": "ok"}
+
+        return gen()
+
+    events = [e async for e in stream_with_token_retry(make_stream, initial_budget=32000)]
+    assert events == [{"type": "ok"}]
+    assert seen == [32000, 16000], seen
+
+
+async def test_budget_shrink_is_bounded():
+    seen: list[int] = []
+
+    def make_stream(budget: int):
+        seen.append(budget)
+
+        async def gen():
+            raise RuntimeError("402: fewer max_tokens, can only afford 100")
+            yield  # pragma: no cover
+
+        return gen()
+
+    with pytest.raises(RuntimeError, match="can only afford"):
+        async for _ in stream_with_token_retry(make_stream, initial_budget=32000, min_budget=4096):
+            pass
+    assert seen[-1] == 4096 and len(seen) <= 6, seen
+
+
+def test_next_budget_moves_in_the_right_direction():
+    """Budget adaptation: grow when thinking ate it, shrink when the provider refused it."""
+    from pydantic_ai.exceptions import UnexpectedModelBehavior
+
+    from kicad_harness.server import next_budget
+
+    exhausted = UnexpectedModelBehavior(
+        "Model token limit (16000) exceeded before any response was generated."
+    )
+    assert next_budget(16000, exhausted) == 32000          # too small -> grow
+    assert next_budget(64000, exhausted) is None           # already at the ceiling
+
+    credit = RuntimeError("402: fewer max_tokens, you can only afford 25411 tokens")
+    assert next_budget(32000, credit) == 16000             # too large -> shrink
+    assert next_budget(4096, credit) is None               # already at the floor
+
+    assert next_budget(16000, RuntimeError("something else broke")) is None

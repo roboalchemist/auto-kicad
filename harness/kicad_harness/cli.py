@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import asyncio
 import json
 import sys
@@ -209,16 +211,38 @@ async def _run(name, prompt, loop, model, supervised, thread_id, color) -> int:
                                  prompt=user_prompt or "(resume after approval)", source="cli")
             stream = AGUIEventStream(thread_id=thread_id, run_id=run_id)
             captured: dict[str, Any] = {}
+            started: dict[str, bool] = {}
 
-            async def native():
+            async def attempt(budget):
+                # Yield events for one run at the given completion budget. Any event at all means
+                # the attempt produced output, so a later failure must not be retried blindly.
                 async with agent.run_stream_events(
                     user_prompt, deps=deps, message_history=history, deferred_tool_results=deferred,
                     usage_limits=usage_limits_for(goal),
+                    model_settings=ModelSettings(max_tokens=budget),
                 ) as events:
                     async for event in events:
                         if isinstance(event, AgentRunResultEvent):
                             captured["result"] = event.result
+                        started["ok"] = True
                         yield event
+
+            async def native():
+                from kicad_harness.server import clamp_budget, next_budget
+
+                budget = clamp_budget(int(os.environ.get("HARNESS_MAX_TOKENS", "20000")))
+                for _ in range(6):
+                    started["ok"] = False
+                    try:
+                        async for event in attempt(budget):
+                            yield event
+                        return
+                    except Exception as exc:
+                        retry = next_budget(budget, exc)
+                        if retry is None or started["ok"]:
+                            raise
+                        print(paint(YELLOW, f"\n(adapting max_tokens {budget} -> {retry})"))
+                        budget = retry
 
             printer = _Printer(paint)
             run_status = "error"

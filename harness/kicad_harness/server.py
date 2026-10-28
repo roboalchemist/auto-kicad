@@ -100,31 +100,68 @@ class SseFanout:
             return value
 
 
+def clamp_budget(budget: int, min_budget: int = 4096, max_budget: int = 64000) -> int:
+    return max(min_budget, min(max_budget, int(budget)))
+
+
+# Reasons a provider gives when the *requested* budget is more than it will accept.
+_BUDGET_TOO_LARGE = (
+    "can only afford",
+    "fewer max_tokens",
+    "max_tokens is too large",
+    "maximum context length",
+    "reduce the length",
+)
+
+
+def next_budget(budget: int, exc: BaseException, min_budget: int = 4096, max_budget: int = 64000) -> int | None:
+    """The budget to retry with after ``exc``, or ``None`` if this error is not about the budget.
+
+    Two opposite failures need opposite responses: the model spending its whole budget on
+    thinking needs a *larger* one, while a provider credit/context limit needs a *smaller* one.
+    """
+    message = str(exc).lower()
+    if "token limit" in message and "exceeded before any response" in message and budget < max_budget:
+        return min(max_budget, budget * 2)
+    if any(marker in message for marker in _BUDGET_TOO_LARGE) and budget > min_budget:
+        return max(min_budget, budget // 2)
+    return None
+
+
 async def stream_with_token_retry(
     make_stream: Callable[[int], Any],
     initial_budget: int | None = None,
     max_budget: int = 64000,
+    min_budget: int = 4096,
+    max_attempts: int = 6,
 ) -> Any:
-    """Yield events from ``make_stream(budget)``, retrying when the model spent its whole
-    completion budget on thinking and produced nothing.
+    """Yield events from ``make_stream(budget)``, adapting the completion budget on failure.
 
-    A reasoning model can return ``finish_reason='length'`` with no actionable output, which
-    pydantic-ai raises as a fatal ``UnexpectedModelBehavior``. Nothing usable was streamed in
-    that case, so a retry with a larger budget is safe and much better than ending the run.
+    Two opposite failures, both fatal if unhandled:
+
+    - **Too small.** A reasoning model spends the whole budget thinking and returns
+      ``finish_reason='length'`` with no output; pydantic-ai raises ``UnexpectedModelBehavior``.
+      Retry with a larger budget.
+    - **Too large.** A provider with an account credit limit rejects the request outright
+      ("requested up to 32000 tokens, but can only afford 25411"). Retry with a smaller one.
+
+    Nothing actionable was streamed in either case, so retrying is safe.
     """
-    budget = initial_budget or int(os.environ.get("HARNESS_MAX_TOKENS", "32000"))
-    attempt = 0
+    budget = clamp_budget(initial_budget or int(os.environ.get("HARNESS_MAX_TOKENS", "20000")),
+                          min_budget, max_budget)
+    attempts = 0
     while True:
+        attempts += 1
         try:
             async for event in make_stream(budget):
                 yield event
             return
-        except UnexpectedModelBehavior as exc:
-            if "token limit" not in str(exc) or attempt >= 2 or budget >= max_budget:
+        except Exception as exc:  # noqa: BLE001 - provider errors arrive in many types
+            retry = next_budget(budget, exc, min_budget, max_budget) if attempts < max_attempts else None
+            if retry is None:
                 raise
-            attempt += 1
-            budget = min(max_budget, budget * 2)
-            log.warning("model hit its token limit with no output; retrying with max_tokens=%d", budget)
+            log.warning("retrying with max_tokens=%d after: %s", retry, str(exc)[:120])
+            budget = retry
 
 
 async def _rev_hash(svc: Services, ws, rev: str) -> str:
