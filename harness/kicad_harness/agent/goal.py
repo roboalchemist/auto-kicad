@@ -38,6 +38,16 @@ CRITERIA: dict[str, tuple[tuple[str, ...], str]] = {
 Measure = Callable[[dict, str, str], dict]
 
 
+def with_board_state(drc: dict | None, board_exists: bool) -> dict:
+    """Add the facts the board-phase criteria need but DRC does not report.
+
+    ``board_laid_out`` used to be supplied only by the schematic-phase evaluator, so a goal that
+    required a board stayed unmet for ever once the board existed — in four separate call sites.
+    Every evaluator now goes through here.
+    """
+    return {**(drc or {}), "board_laid_out": bool(board_exists)}
+
+
 def default_goal() -> dict[str, Any]:
     return copy.deepcopy(DEFAULT_GOAL)
 

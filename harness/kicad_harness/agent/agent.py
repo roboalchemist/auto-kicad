@@ -201,9 +201,7 @@ async def _evaluate(ctx: RunContext[HarnessDeps]) -> dict:
         return evaluation
     board_hash, index = await _working(ctx)
     drc = await asyncio.to_thread(svc.artifacts.drc, board_hash)
-    # Once there is a board, board_laid_out is satisfied by its existence — otherwise a goal
-    # written during the schematic phase could never pass and the loop would never finish.
-    drc = {**drc, "board_laid_out": ws.board_path.is_file()}
+    drc = goals.with_board_state(drc, ws.board_path.is_file())
     evaluation = goals.evaluate(ws.goal(), index, drc, threads)
     ctx.deps.state.goal = GoalStatus.model_validate(evaluation)
     return evaluation
@@ -1546,7 +1544,7 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
             svc = ctx.deps.services
             board_hash, _ = svc.artifacts.materialize(ws.board_path.read_bytes())
             index = svc.artifacts.index(board_hash)
-            drc = svc.artifacts.drc(board_hash)
+            drc = goals.with_board_state(svc.artifacts.drc(board_hash), ws.board_path.is_file())
             evaluation = goals.evaluate(spec, index, drc, svc.store.review.list(st.design))
             st.goal_met = bool(evaluation.get("met"))
             st.goal = evaluation

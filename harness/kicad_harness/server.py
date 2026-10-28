@@ -943,6 +943,7 @@ def create_app() -> FastAPI:
         board_hash = await _rev_hash(svc, ws, rev)
         index = await asyncio.to_thread(svc.artifacts.index, board_hash)
         drc = await asyncio.to_thread(svc.artifacts.drc, board_hash)
+        drc = goals.with_board_state(drc, ws.board_path.is_file())
         return goals.evaluate(ws.goal(), index, drc, svc.store.review.list(design))
 
     # ------------------------------------------------------------------ steering (messages mid-run)

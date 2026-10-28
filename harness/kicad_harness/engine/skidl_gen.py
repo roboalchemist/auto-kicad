@@ -155,12 +155,12 @@ def generate(
     # skidl's auto-router fails intermittently ("RoutingFailure") on netlists it routes fine on
     # the next try, so a long goal loop must not treat one failure as permanent.
     last_error: Exception | None = None
-    for attempt in range(3):
+    for attempt in range(5):
         try:
             return _run_once(payload, out, env, timeout)
         except EngineError as exc:
             last_error = exc
-            if "RoutingFailure" not in str(exc) or attempt == 2:
+            if "RoutingFailure" not in str(exc) or attempt == 4:
                 raise
     assert last_error is not None
     raise last_error

@@ -289,9 +289,9 @@ async def _run(name, prompt, loop, model, supervised, thread_id, color) -> int:
 def _eval_inputs(svc, ws, name):
     board_hash, _ = svc.artifacts.materialize(ws.board_path.read_bytes())
     drc = svc.artifacts.drc(board_hash)
-    # A board exists here, so board_laid_out holds; without this a goal written in the schematic
-    # phase can never pass and the loop reports it as unmet after doing the work.
-    drc = {**drc, "board_laid_out": ws.board_path.is_file()}
+    from kicad_harness.agent import goal as goals
+
+    drc = goals.with_board_state(drc, ws.board_path.is_file())
     return svc.artifacts.index(board_hash), drc, svc.store.review.list(name)
 
 
