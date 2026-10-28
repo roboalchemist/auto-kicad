@@ -72,6 +72,7 @@ DEFAULT_GOAL: dict[str, Any] = {
 DEFAULT_SCHEMATIC_GOAL: dict[str, Any] = {
     "summary": "Draw a complete schematic for the brief with no ERC errors, then lay out the board.",
     "criteria": [
+        {"id": "wired", "type": "unconnected_pins", "max": 0},
         {"id": "erc", "type": "erc_errors", "max": 0},
         {"id": "board", "type": "board_laid_out", "min": 1},
     ],
