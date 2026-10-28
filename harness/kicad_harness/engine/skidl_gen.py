@@ -152,6 +152,21 @@ def generate(
         "nets": [n.__dict__ for n in nets],
     }
     env = _env(symbol_dirs, footprint_dirs)
+    # skidl's auto-router fails intermittently ("RoutingFailure") on netlists it routes fine on
+    # the next try, so a long goal loop must not treat one failure as permanent.
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            return _run_once(payload, out, env, timeout)
+        except EngineError as exc:
+            last_error = exc
+            if "RoutingFailure" not in str(exc) or attempt == 2:
+                raise
+    assert last_error is not None
+    raise last_error
+
+
+def _run_once(payload: dict[str, Any], out: Path, env: dict[str, str], timeout: float) -> GenerationResult:
     with tempfile.TemporaryDirectory(prefix="harness-skidl-") as tmp:
         tmpdir = Path(tmp)
         script = tmpdir / "generate.py"

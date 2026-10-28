@@ -489,23 +489,44 @@ class Schematic:
         return points
 
     def pin_net(self, placement: SymbolPlacement, number: str) -> str | None:
-        """Net attached to a pin: from a label at one of its points, or a wire that reaches it."""
+        """Net attached to a pin, following wires transitively.
+
+        A pin is often joined to its net by a *chain* of wire segments (skidl draws one segment
+        per leg), with the label somewhere else on the chain. Looking only at wires that touch
+        the pin directly made every chained connection read as unconnected.
+        """
         keys = {NetNode(*p).key() for p in self.pin_points(placement, number)}
         if not keys:
             return None
-        for label in find_all(self.tree, "label") + find_all(self.tree, "global_label"):
-            at = find_one(label, "at")
-            if not at or len(at) < 3:
-                continue
-            if NetNode(float(at[1]), float(at[2])).key() in keys:
-                return _clean(label[1]) if len(label) > 1 else None
+
+        # Wire adjacency: point -> neighbouring points on the same segment.
+        adjacency: dict[tuple[float, float], set[tuple[float, float]]] = {}
         for wire in self.wires:
             pts = find_one(wire, "pts")
             if not pts:
                 continue
-            ends = {NetNode(float(p[1]), float(p[2])).key() for p in find_all(pts, "xy") if len(p) > 2}
-            if keys & ends:
-                return self.wire_net(wire)
+            ends = [NetNode(float(p[1]), float(p[2])).key() for p in find_all(pts, "xy") if len(p) > 2]
+            for a, b in zip(ends, ends[1:]):
+                adjacency.setdefault(a, set()).add(b)
+                adjacency.setdefault(b, set()).add(a)
+
+        labels: dict[tuple[float, float], str] = {}
+        for label in find_all(self.tree, "label") + find_all(self.tree, "global_label"):
+            at = find_one(label, "at")
+            if at and len(at) > 2:
+                labels[NetNode(float(at[1]), float(at[2])).key()] = _clean(label[1])
+
+        # Breadth-first over wire segments from every point of the pin.
+        seen: set[tuple[float, float]] = set()
+        queue = [k for k in keys]
+        while queue:
+            point = queue.pop()
+            if point in seen:
+                continue
+            seen.add(point)
+            if point in labels:
+                return labels[point]
+            queue.extend(p for p in adjacency.get(point, ()) if p not in seen)
         return None
 
     def wire_net(self, wire: list) -> str | None:
@@ -657,14 +678,24 @@ class Schematic:
         }
 
     def unconnected_pins(self) -> list[dict[str, str]]:
-        """Pins with no label and no wire — the ones ERC will complain about."""
+        """Pins that reach no net — the ones ERC complains about.
+
+        Uses the full connectivity graph (wires, labels *and* pins that meet at a point, which
+        is how a pin joins a power symbol), because a pin can be connected with no label and no
+        wire of its own.
+        """
+        connected = {
+            (member["ref"], str(member["pin"]))
+            for members in self.build_connectivity().values()
+            for member in members
+        }
         out = []
         for placement in self.placements():
             symbol = self.lookup(placement.lib_id)
-            if symbol is None:
+            if symbol is None or placement.reference.startswith("#"):
                 continue
             for number in symbol.pins:
-                if self.pin_net(placement, number) is None:
+                if (placement.reference, str(number)) not in connected:
                     out.append({"ref": placement.reference, "pin": number})
         return out
 
@@ -791,6 +822,65 @@ class Schematic:
         ]
         self._insert_after_uuid(node)
         return node
+
+    def draw_pin_stubs(self, length: float = 2.54) -> dict[str, int]:
+        """Give every labelled pin a visible stub wire from the pin out to its net label.
+
+        Generators (and ``generate_schematic_skidl`` in particular) place a net label exactly on
+        each pin anchor. That is electrically correct — KiCad joins them — but nothing is drawn,
+        so the sheet looks like a floor plan with no wires and reads as unfinished.
+
+        For each label sitting on a pin, this moves the label ``length`` outward along the pin's
+        own direction and wires pin → label. Real schematics look like this (pin, stub, net
+        name), and it cannot overlap another pin because the stub only extends along a direction
+        that is checked first.
+
+        Returns ``{"stubbed": n, "skipped_occupied": n}``.
+        """
+        # Every pin point, so a stub never lands on a foreign pin (which would join it).
+        pin_points: dict[tuple[float, float], list[tuple[str, str]]] = {}
+        outward: dict[tuple[float, float], tuple[float, float]] = {}
+        for placement in self.placements():
+            symbol = self.lookup(placement.lib_id)
+            if symbol is None:
+                continue
+            for number in symbol.pins:
+                anchor = self.pin_position(placement, number)
+                if anchor is None:
+                    continue
+                key = NetNode(*anchor).key()
+                pin_points.setdefault(key, []).append((placement.reference, number))
+                end = self.pin_endpoint(placement, number)
+                if end and end != anchor:
+                    outward.setdefault(key, (end[0] - anchor[0], end[1] - anchor[1]))
+
+        labels = find_all(self.tree, "label") + find_all(self.tree, "global_label")
+        stubbed = skipped = 0
+        for label in labels:
+            at = find_one(label, "at")
+            if not at or len(at) < 3:
+                continue
+            point = NetNode(float(at[1]), float(at[2])).key()
+            direction = outward.get(point)
+            if direction is None:
+                continue  # a label on a wire or free space, not on a pin
+            norm = math.hypot(*direction)
+            if norm == 0:
+                continue
+            target = (
+                round(point[0] + direction[0] / norm * length, 6),
+                round(point[1] + direction[1] / norm * length, 6),
+            )
+            target_key = NetNode(*target).key()
+            if target_key in pin_points:
+                skipped += 1
+                continue
+            self.add_wire([point, target])
+            at[1] = num(target[0])
+            at[2] = num(target[1])
+            stubbed += 1
+
+        return {"stubbed": stubbed, "skipped_occupied": skipped}
 
     def add_junction(self, x: float, y: float) -> list:
         """Mark a T-connection where three or more wires meet."""

@@ -32,6 +32,7 @@ CRITERIA: dict[str, tuple[tuple[str, ...], str]] = {
     "erc_errors": (("max",), "ERC errors <= {max}"),
     "erc_warnings": (("max",), "ERC warnings <= {max}"),
     "board_laid_out": (("min",), "board laid out from the schematic"),
+    "unconnected_pins": (("max",), "unconnected schematic pins <= {max}"),
 }
 
 Measure = Callable[[dict, str, str], dict]
@@ -181,6 +182,10 @@ def evaluate_criterion(
             key = "errors" if ctype == "erc_errors" else "warnings"
             value = int(erc_counts.get(key, 0))
             result.update(value=value, passed=value <= c["max"], detail=f"{value} ERC {key} (max {c['max']})")
+        elif ctype == "unconnected_pins":
+            value = int((drc or {}).get("unconnected_pins", 0))
+            result.update(value=value, passed=value <= c["max"],
+                          detail=f"{value} unconnected pins (max {c['max']})")
         elif ctype == "board_laid_out":
             laid_out = 1 if (drc or {}).get("board_laid_out") else 0
             result.update(value=laid_out, passed=laid_out >= int(c.get("min", 1)),

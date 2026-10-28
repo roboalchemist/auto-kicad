@@ -334,3 +334,43 @@ def test_skidl_failure_names_the_problem(tmp_path: Path) -> None:
     # ...and the near-miss suggestions point at a real symbol.
     matches = skidl_gen.suggest_symbols("Timer", "NE555")
     assert "NE555P" in matches
+
+
+def test_pin_net_follows_a_chain_of_wires(tmp_path: Path, libraries, ids) -> None:
+    """Regression: a pin joined by several segments read as unconnected.
+
+    Generators draw one segment per leg with the label elsewhere on the chain; looking only at
+    wires touching the pin made every chained connection look floating.
+    """
+    doc = sch.Schematic.create(tmp_path / "s.kicad_sch", libraries=libraries)
+    a = doc.add_symbol(ids[0], "R1", 100.0, 100.0)
+    pin = next(iter(doc.lookup(ids[0]).pins))
+    x, y = doc.pin_position(a, pin)
+    # Two segments, then the label at the far end of the second.
+    elbow = (x + 5.08, y)
+    far = (x + 5.08, y + 5.08)
+    doc.add_wire([(x, y), elbow])
+    doc.add_wire([elbow, far])
+    doc.add_label("CHAINED", *far)
+
+    assert doc.pin_net(a, pin) == "CHAINED"
+    assert {"CHAINED"} <= set(doc.nets())
+    assert {"ref": "R1", "pin": pin} not in doc.unconnected_pins()
+
+
+def test_draw_pin_stubs_wires_labels_and_keeps_the_netlist(tmp_path: Path, libraries, ids) -> None:
+    """Labels sitting on pin anchors get a visible stub without changing connectivity."""
+    doc = sch.Schematic.create(tmp_path / "s.kicad_sch", libraries=libraries)
+    a = doc.add_symbol(ids[0], "R1", 100.0, 100.0)
+    pin = next(iter(doc.lookup(ids[0]).pins))
+    doc.add_label("STUBBED", *doc.pin_position(a, pin))
+    assert not doc.wires
+
+    result = doc.draw_pin_stubs()
+    assert result["stubbed"] == 1
+    assert len(doc.wires) == 1
+    doc.save()
+
+    again = sch.Schematic.load(doc.path, libraries=libraries)
+    assert again.pin_net(again.placements()[0], pin) == "STUBBED"
+    assert again.unconnected_pins() == [{"ref": "R1", "pin": p} for p in again.lookup(ids[0]).pins if p != pin]

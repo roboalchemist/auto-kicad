@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 import re
 import time
 import uuid
@@ -18,11 +20,15 @@ from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from pydantic_ai.exceptions import UnexpectedModelBehavior
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 
 from kicad_harness.agent import models as model_catalog
 
 import kicad_harness.agui_compat
+
+log = logging.getLogger(__name__)
 
 kicad_harness.agui_compat.apply_pydantic_ai_agui_patch()
 
@@ -92,6 +98,33 @@ class SseFanout:
             value = await loop.run_in_executor(self._executor, probe)
             self._entries[key] = (time.monotonic(), value)
             return value
+
+
+async def stream_with_token_retry(
+    make_stream: Callable[[int], Any],
+    initial_budget: int | None = None,
+    max_budget: int = 64000,
+) -> Any:
+    """Yield events from ``make_stream(budget)``, retrying when the model spent its whole
+    completion budget on thinking and produced nothing.
+
+    A reasoning model can return ``finish_reason='length'`` with no actionable output, which
+    pydantic-ai raises as a fatal ``UnexpectedModelBehavior``. Nothing usable was streamed in
+    that case, so a retry with a larger budget is safe and much better than ending the run.
+    """
+    budget = initial_budget or int(os.environ.get("HARNESS_MAX_TOKENS", "32000"))
+    attempt = 0
+    while True:
+        try:
+            async for event in make_stream(budget):
+                yield event
+            return
+        except UnexpectedModelBehavior as exc:
+            if "token limit" not in str(exc) or attempt >= 2 or budget >= max_budget:
+                raise
+            attempt += 1
+            budget = min(max_budget, budget * 2)
+            log.warning("model hit its token limit with no output; retrying with max_tokens=%d", budget)
 
 
 async def _rev_hash(svc: Services, ws, rev: str) -> str:
@@ -300,7 +333,17 @@ def create_app() -> FastAPI:
         async def final_state(_result):
             yield _snapshot(deps.state)
 
-        events = adapter.run_stream(deps=deps, usage_limits=usage_limits_for(goal), on_complete=final_state)
+        def make_stream(budget: int):
+            return adapter.run_stream(
+                deps=deps,
+                usage_limits=usage_limits_for(goal),
+                on_complete=final_state,
+                model_settings=ModelSettings(max_tokens=budget),
+            )
+
+        async def event_stream():
+            async for event in stream_with_token_retry(make_stream):
+                yield event
 
         host.active += 1
         flags = request.app.state.stop_flags
@@ -311,7 +354,7 @@ def create_app() -> FastAPI:
         async def logged():
             status = "error"
             try:
-                async for event in events:
+                async for event in event_stream():
                     if stop is not None and stop.is_set():
                         status = "cancelled"
                         break

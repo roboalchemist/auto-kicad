@@ -9,6 +9,7 @@ See DESIGN.md, "Agent".
 from __future__ import annotations
 
 import asyncio
+import os
 import dataclasses
 import json
 import re
@@ -106,15 +107,37 @@ async def _working(ctx: RunContext[HarnessDeps]) -> tuple[str, dict]:
     return board_hash, index
 
 
+class ToolRefusal(Exception):
+    """A tool can't act in the current state; the model gets data back, not a retry.
+
+    Raising ``ModelRetry`` for a state problem (no board yet, wrong phase) counts against
+    pydantic-ai's 5-tool retry budget, so a model that keeps trying dies with "exceeded max
+    retries count of 5". A refusal returns a normal tool result instead.
+    """
+
+
+def guarded(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Turn a ``ToolRefusal`` raised inside a tool into an ``ok: false`` tool result."""
+    import functools
+
+    @functools.wraps(fn)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await fn(*args, **kwargs)
+        except ToolRefusal as exc:
+            return ToolReturn(return_value={"ok": False, "error": str(exc)})
+
+    return wrapper
+
+
 def _require_board(ctx: RunContext[HarnessDeps], tool: str = "this tool"):
     """Refuse a board-only operation while the design is still a schematic.
 
-    Raises ``ModelRetry`` so the model gets a clear instruction rather than an exception that
-    would count against the tool-retry budget and end the run.
+    Raises ``ToolRefusal`` so the model gets a clear instruction as ordinary tool data.
     """
     ws = _ws(ctx)
     if ws.phase() == "schematic" or not ws.board_path.is_file():
-        raise ModelRetry(
+        raise ToolRefusal(
             f"{tool} needs a board, but this design is in the schematic phase and has none yet. "
             "Draw the schematic with the schematic tools (add_symbol, connect_pins, "
             "generate_schematic_skidl) and call start_board_layout when ERC is clean; the board "
@@ -162,7 +185,17 @@ async def _evaluate(ctx: RunContext[HarnessDeps]) -> dict:
             erc_counts = report["counts"]
         except Exception:  # an unreadable schematic fails the ERC criteria, not the run
             erc_counts = {"errors": 1, "warnings": 0}
-        fake = {"erc_counts": erc_counts, "board_laid_out": ws.board_path.is_file()}
+        try:
+            from kicad_harness.engine.schematic import Schematic
+
+            floating = await asyncio.to_thread(lambda: len(Schematic.load(ws.schematic_path).unconnected_pins()))
+        except Exception:
+            floating = 0
+        fake = {
+            "erc_counts": erc_counts,
+            "board_laid_out": ws.board_path.is_file(),
+            "unconnected_pins": floating,
+        }
         evaluation = goals.evaluate(ws.goal(), {}, fake, threads)
         ctx.deps.state.goal = GoalStatus.model_validate(evaluation)
         return evaluation
@@ -363,11 +396,14 @@ async def _edit(
         raise ApprovalRequired()
     ws = _ws(ctx)
     if ws.phase() == "schematic":
-        raise ModelRetry(
-            "This design has no board yet: it is in the schematic phase. Draw the schematic with the "
-            "schematic tools (add_symbol, connect_pins, generate_schematic_skidl, ...) and call "
-            "start_board_layout when ERC is clean; then the board tools become available."
-        )
+        return ToolReturn(return_value={
+            "ok": False,
+            "error": (
+                "This design has no board yet: it is in the schematic phase. Draw the schematic with "
+                "the schematic tools (add_symbol, connect_pins, generate_schematic_skidl, ...) and call "
+                "start_board_layout when ERC is clean; then the board tools become available."
+            ),
+        })
 
     def run() -> tuple[Any, Any]:
         with ws.lock:
@@ -577,8 +613,17 @@ def set_model(model: str | None) -> None:
 
 
 def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredToolRequests]:
-    """Create the harness agent. `model` defaults to `current_model()`."""
+    """Create the harness agent. `model` defaults to `current_model()`.
+
+    ``max_tokens`` and thinking effort are configurable because a reasoning model can spend the
+    whole completion budget on thinking, returning ``finish_reason='length'`` with no actionable
+    output — which pydantic-ai raises as a fatal ``UnexpectedModelBehavior`` ("Model token limit
+    ... exceeded before any response was generated").
+    """
     from kicad_harness.agent import models as model_catalog
+
+    max_tokens = int(os.environ.get("HARNESS_MAX_TOKENS", "32000"))
+    thinking = os.environ.get("HARNESS_THINKING", "low")
 
     agent: Agent[HarnessDeps, str | DeferredToolRequests] = Agent(
         model_catalog.resolve(model or current_model()),
@@ -588,12 +633,12 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         instructions=INSTRUCTIONS,
         capabilities=[
             Caching(),
-            Thinking(effort="medium"),
+            Thinking(effort=thinking),
             ProcessHistory(_keep_recent_images),
             _steering_hooks(),
         ],
         retries={"tools": 5, "output": 60},
-        model_settings=ModelSettings(max_tokens=16000),
+        model_settings=ModelSettings(max_tokens=max_tokens),
         defer_model_check=True,
     )
 
@@ -634,6 +679,7 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
     # ------------------------------------------------------------------ inspection
 
     @agent.tool
+    @guarded
     async def design_summary(ctx: RunContext[HarnessDeps], **_: Any) -> ToolReturn:
         """Board outline, components (ref, value, footprint, position, side), nets, DRC counts, goal status and open review threads."""
         svc = ctx.deps.services
@@ -666,6 +712,7 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         return ToolReturn(return_value=summary, metadata=[_snapshot(ctx.deps.state)])
 
     @agent.tool
+    @guarded
     async def query(
         ctx: RunContext[HarnessDeps],
         kind: str,
@@ -683,7 +730,9 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         """
         plural = {"footprint": "footprints", "pad": "pads", "track": "tracks", "via": "vias", "zone": "zones"}
         if kind not in plural:
-            raise ModelRetry(f"kind must be one of {sorted(plural)}")
+            return ToolReturn(return_value={
+                "ok": False, "error": f"kind must be one of {sorted(plural)}",
+            })
         _, index = await _working(ctx)
         items = index.get(plural[kind], [])
         if ref:
@@ -707,7 +756,8 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         return {"count": len(trimmed), "items": trimmed[:MAX_LIST], "truncated": len(trimmed) > MAX_LIST}
 
     @agent.tool
-    async def measure(ctx: RunContext[HarnessDeps], a: str, b: str) -> dict:
+    @guarded
+    async def measure(ctx: RunContext[HarnessDeps], a: str, b: str) -> Any:
         """Edge-to-edge copper distance between two things (0 = touching).
 
         Args:
@@ -723,6 +773,7 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
             raise ModelRetry(f"Could not measure {a!r} to {b!r}: {exc}") from exc
 
     @agent.tool
+    @guarded
     async def check(ctx: RunContext[HarnessDeps], **_: Any) -> ToolReturn:
         """Run KiCad DRC on the current board and evaluate every goal criterion."""
         svc = ctx.deps.services
@@ -752,6 +803,7 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         return ToolReturn(return_value=result, metadata=[_snapshot(ctx.deps.state)])
 
     @agent.tool
+    @guarded
     async def render_view(
         ctx: RunContext[HarnessDeps],
         target: str | None = None,
@@ -823,7 +875,8 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
     # ------------------------------------------------------------------ review
 
     @agent.tool
-    async def list_feedback(ctx: RunContext[HarnessDeps], status: str = "open") -> dict:
+    @guarded
+    async def list_feedback(ctx: RunContext[HarnessDeps], status: str = "open") -> Any:
         """The user's review threads, anchored to entities on the board and located on the current version.
 
         Args:
@@ -1147,9 +1200,11 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         lib_name = symbol.split(":", 1)[0] if ":" in symbol else ""
         if lib_name and not _library(ctx, lib_name):
             known = sorted(p.stem for p in (_KI_LIBRARY_DIRS or []))[:20]
-            raise ModelRetry(
-                f"no symbol library named {lib_name!r}. Installed libraries include: {', '.join(known)}"
-            )
+            return ToolReturn(return_value={
+                "ok": False,
+                "error": f"no symbol library named {lib_name!r}",
+                "available_libraries": known,
+            })
         return await _schematic_edit(
             ctx, "add_symbol", f"Place {ref} ({symbol})",
             lambda d: d.add_symbol(symbol, ref, x, y, rotation=rotation, value=value, footprint=footprint),
@@ -1217,11 +1272,13 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
 
         ws = _ws(ctx)
         if ws.phase() != "schematic":
-            raise ModelRetry("this design is already in the board phase; the schematic is final.")
+            return ToolReturn(return_value={
+                "ok": False, "error": "this design is already in the board phase; the schematic is final",
+            })
         try:
             validated_parts, validated_nets = skidl_gen.validate({"parts": parts, "nets": nets})
         except ValueError as exc:
-            raise ModelRetry(f"the netlist is invalid: {exc}") from exc
+            return ToolReturn(return_value={"ok": False, "error": f"the netlist is invalid: {exc}"})
         target = ws.schematic_path
         # Keep the current file so a refused generation can put it back untouched.
         previous = target.read_bytes() if target.is_file() else None
@@ -1256,7 +1313,19 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
                     "[\"U1.1\", \"C1.2\"]}), or use connect_pins to wire specific pins."
                 ),
             })
-        payload = {"ok": True, "path": target.name, "parts": len(validated_parts), "nets": len(validated_nets)}
+        # Give labelled pins visible wires: skidl places labels on pin anchors, and a sheet with
+        # labels but no wires reads as unfinished even though the netlist is right.
+        try:
+            from kicad_harness.engine.schematic import Schematic
+
+            doc = await asyncio.to_thread(Schematic.load, target)
+            stubs = await asyncio.to_thread(doc.draw_pin_stubs)
+            if stubs.get("stubbed"):
+                await asyncio.to_thread(doc.save)
+        except Exception:
+            stubs = {}
+        payload = {"ok": True, "path": target.name, "parts": len(validated_parts),
+                   "nets": len(validated_nets), "stubs": stubs}
         if result.warnings:
             payload["warnings"] = result.warnings[:10]
         # Report which parts JLCPCB actually stocks, so an unmakeable board is visible immediately.
@@ -1309,10 +1378,18 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         except Exception as exc:
             return ToolReturn(return_value={"ok": False, "error": _engine_error_text(exc)})
         if report["counts"].get("errors"):
-            raise ModelRetry(
-                f"ERC still reports {report['counts']['errors']} errors; fix them before laying out. "
-                + "; ".join(v["description"] or v["type"] for v in report["violations"] if v["severity"] == "error")[:600]
-            )
+            return ToolReturn(return_value={
+                "ok": False,
+                "error": (
+                    f"ERC still reports {report['counts']['errors']} errors; fix them before laying out."
+                ),
+                "erc_errors": [
+                    v["description"] or v["type"]
+                    for v in report["violations"]
+                    if v["severity"] == "error"
+                ][:20],
+                "hint": "Use check_schematic for the full list, fix the wiring, then call this again.",
+            })
 
         def run() -> dict:
             netlist = kicad_cli.parse_netlist(
@@ -1369,6 +1446,19 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
             return ToolReturn(return_value={"ok": False, "error": _engine_error_text(exc)})
         result["ok"] = True
         return ToolReturn(return_value=result)
+
+    @agent.tool(sequential=True)
+    async def draw_schematic_wires(ctx: RunContext[HarnessDeps]) -> ToolReturn:
+        """Draw visible wire stubs from every labelled pin out to its net label.
+
+        Generators place net labels exactly on pin anchors: correct electrically, but nothing is
+        drawn, so the sheet looks unwired. This wires pin -> label for every such pin and leaves
+        already-wired pins alone. Safe to call repeatedly.
+        """
+        return await _schematic_edit(
+            ctx, "draw_schematic_wires", "Draw wire stubs to net labels",
+            lambda d: {"stubs": d.draw_pin_stubs()},
+        )
 
     @agent.tool
     async def part_categories(ctx: RunContext[HarnessDeps], term: str | None = None) -> ToolReturn:
@@ -1438,7 +1528,11 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
         try:
             goals.validate_goal(spec)
         except ValueError as exc:
-            raise ModelRetry(f"the goal is invalid: {exc}") from exc
+            return ToolReturn(return_value={
+                "ok": False,
+                "error": f"the goal is invalid: {exc}",
+                "criteria_types": sorted(goals.CRITERIA),
+            })
         with ws.lock:
             version = ws.set_goal(spec, author="agent")
         await _sync_state(ctx, bump=False)
