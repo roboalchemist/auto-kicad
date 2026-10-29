@@ -106,18 +106,44 @@ def bifrost_ids(config, *, timeout: float = 8.0) -> list[str]:
     return _store_ids(base, _fetch_ids(base, key, timeout))
 
 
+def _provider_configured(model: str, config: Any = None) -> bool:
+    """Whether the provider behind ``model`` has credentials on this machine.
+
+    Without this a picker offers routes that can only fail — an exhausted OpenRouter key or a
+    provider whose key was never set — and choosing one aborts the run.
+    """
+    if model.startswith(BIFROST_PREFIX):
+        if os.environ.get("BIFROST_API_KEY"):
+            return True
+        return bool(getattr(config, "bifrost_api_key", None))
+    provider = model.split(":", 1)[0] if ":" in model else ""
+    required = {
+        "openai": ("OPENAI_API_KEY",),
+        "google": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+        "anthropic": ("ANTHROPIC_API_KEY",),
+    }.get(provider)
+    if not required:
+        return True  # unknown provider: let pydantic-ai report it
+    return any(os.environ.get(name) for name in required)
+
+
 def catalog(config) -> list[dict[str, Any]]:
     """Every selectable model, with the id, a label and the provider label."""
     from kicad_harness.config import DEFAULT_MODELS
 
     ids: list[str] = []
     for model in [config.model, *config.models, *DEFAULT_MODELS]:
-        if model and model not in ids:
+        if model and model not in ids and _provider_configured(model, config):
             ids.append(model)
     out = [_entry(model) for model in ids]
     # Bifrost is opt-in: without a base URL the gateway ids are not selectable.
     if (getattr(config, "bifrost_base_url", "") or "").strip():
-        out += [_entry(BIFROST_PREFIX + model_id) for model_id in bifrost_ids(config)]
+        seen = {entry["id"] for entry in out}
+        for model_id in bifrost_ids(config):
+            entry = _entry(BIFROST_PREFIX + model_id)
+            if entry["id"] not in seen:
+                seen.add(entry["id"])
+                out.append(entry)
     return out
 
 

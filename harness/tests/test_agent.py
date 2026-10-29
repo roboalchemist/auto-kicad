@@ -324,7 +324,13 @@ async def test_models_api_lists_and_switches(services, monkeypatch):
         listed = (await client.get("/api/models")).json()
         ids = [m["id"] for m in listed["models"]]
         assert listed["current"] == agent_mod.current_model()
-        assert "openai:anthropic/claude-sonnet-5" in ids and listed["models"][0]["current"] is True
+        # The picker only offers models whose provider has credentials: no dead routes.
+        assert listed["models"][0]["current"] is True
+        assert listed["current"] in ids
+        from kicad_harness.agent.models import _provider_configured
+
+        assert all(_provider_configured(model_id) for model_id in ids), ids
+        assert len(ids) == len(set(ids)), f"duplicate entries: {ids}"
 
         bad = await client.put("/api/models", json={"model": "nonsense"})
         assert bad.status_code == 400 and "provider:model-name" in bad.text

@@ -287,12 +287,32 @@ async def _run(name, prompt, loop, model, supervised, thread_id, color) -> int:
 
 
 def _eval_inputs(svc, ws, name):
-    board_hash, _ = svc.artifacts.materialize(ws.board_path.read_bytes())
-    drc = svc.artifacts.drc(board_hash)
+    """The ``(index, drc, threads)`` triple the goal evaluator needs, for either phase."""
     from kicad_harness.agent import goal as goals
 
-    drc = goals.with_board_state(drc, ws.board_path.is_file())
-    return svc.artifacts.index(board_hash), drc, svc.store.review.list(name)
+    threads = svc.store.review.list(name)
+    if ws.phase() == "schematic" or not ws.board_path.is_file():
+        # No board yet: judge ERC and the wiring, exactly as the agent does in this phase.
+        from kicad_harness.engine import kicad_cli
+        from kicad_harness.engine.schematic import Schematic
+
+        try:
+            counts = kicad_cli.erc(ws.schematic_path).get("counts", {})
+        except Exception:
+            counts = {"errors": 1, "warnings": 0}
+        try:
+            floating = len(Schematic.load(ws.schematic_path).unconnected_pins())
+        except Exception:
+            floating = 0
+        return {}, {
+            "erc_counts": counts,
+            "unconnected_pins": floating,
+            "board_laid_out": False,
+        }, threads
+
+    board_hash, _ = svc.artifacts.materialize(ws.board_path.read_bytes())
+    drc = goals.with_board_state(svc.artifacts.drc(board_hash), True)
+    return svc.artifacts.index(board_hash), drc, threads
 
 
 class _Printer:

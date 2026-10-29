@@ -21,11 +21,9 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(value).expanduser() if value else default
 
 
-# Routes verified with this project; the UI offers these plus the configured model.
-DEFAULT_MODELS = [
-    "openai:anthropic/claude-sonnet-5",
-    "google:gemini-3.1-pro-preview",
-]
+# No hardcoded routes: a model is offered only when its provider is configured (see
+# models.catalog), so a dead key cannot leave an unusable entry in the picker.
+DEFAULT_MODELS: list[str] = []
 
 
 @dataclass

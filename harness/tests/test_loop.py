@@ -216,3 +216,15 @@ def test_cli_exposes_run_and_goals():
     result = CliRunner().invoke(app, ["run", "--help"])
     assert result.exit_code == 0, result.output
     assert "--loop" in result.output
+
+
+def test_cli_evaluation_works_in_the_schematic_phase(services, new_project):
+    """A headless run that stops before layout must not crash reading a missing board."""
+    from kicad_harness.cli import _eval_inputs
+
+    name, ws = new_project  # a fresh project is in the schematic phase with no board
+    index, drc, threads = _eval_inputs(services, ws, name)
+    assert drc["board_laid_out"] is False
+    assert "unconnected_pins" in drc
+    assert "erc_counts" in drc
+    assert isinstance(threads, list)
