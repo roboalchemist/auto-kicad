@@ -623,11 +623,14 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
     """
     from kicad_harness.agent import models as model_catalog
 
-    max_tokens = int(os.environ.get("HARNESS_MAX_TOKENS", "32000"))
+    # Follow the model's own output limit rather than a fixed number; the server and CLI
+    # additionally adapt it up or down at runtime if a provider disagrees.
+    chosen = model or current_model()
+    max_tokens = model_catalog.budget_for(chosen)
     thinking = os.environ.get("HARNESS_THINKING", "low")
 
     agent: Agent[HarnessDeps, str | DeferredToolRequests] = Agent(
-        model_catalog.resolve(model or current_model()),
+        model_catalog.resolve(chosen),
         name="kicad_harness",
         deps_type=HarnessDeps,
         output_type=[str, DeferredToolRequests],

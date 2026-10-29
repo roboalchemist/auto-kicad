@@ -152,7 +152,7 @@ class SseFanout:
             return value
 
 
-def clamp_budget(budget: int, min_budget: int = 4096, max_budget: int = 64000) -> int:
+def clamp_budget(budget: int, min_budget: int = 4096, max_budget: int = 131072) -> int:
     return max(min_budget, min(max_budget, int(budget)))
 
 
@@ -166,7 +166,7 @@ _BUDGET_TOO_LARGE = (
 )
 
 
-def next_budget(budget: int, exc: BaseException, min_budget: int = 4096, max_budget: int = 64000) -> int | None:
+def next_budget(budget: int, exc: BaseException, min_budget: int = 4096, max_budget: int = 131072) -> int | None:
     """The budget to retry with after ``exc``, or ``None`` if this error is not about the budget.
 
     Two opposite failures need opposite responses: the model spending its whole budget on
@@ -183,7 +183,7 @@ def next_budget(budget: int, exc: BaseException, min_budget: int = 4096, max_bud
 async def stream_with_token_retry(
     make_stream: Callable[[int], Any],
     initial_budget: int | None = None,
-    max_budget: int = 64000,
+    max_budget: int = 131072,
     min_budget: int = 4096,
     max_attempts: int = 6,
 ) -> Any:
@@ -199,8 +199,12 @@ async def stream_with_token_retry(
 
     Nothing actionable was streamed in either case, so retrying is safe.
     """
-    budget = clamp_budget(initial_budget or int(os.environ.get("HARNESS_MAX_TOKENS", "20000")),
-                          min_budget, max_budget)
+    if initial_budget is None:
+        from kicad_harness.agent import agent as agent_mod
+        from kicad_harness.agent import models as model_catalog
+
+        initial_budget = model_catalog.budget_for(agent_mod.current_model())
+    budget = clamp_budget(initial_budget, min_budget, max_budget)
     attempts = 0
     while True:
         attempts += 1
@@ -373,6 +377,8 @@ async def lifespan(app: FastAPI):
     stale = svc.store.runs.interrupt_stale()
     # Warm the Bifrost catalog in the background: the gateway's /v1/models takes seconds.
     asyncio.create_task(asyncio.to_thread(model_catalog.bifrost_ids, svc.config))
+    # Also learn each model's advertised output limit, so max_tokens follows the model.
+    asyncio.create_task(asyncio.to_thread(model_catalog.warm_model_limits, svc.config))
     if stale:
         import logging
 
@@ -431,7 +437,11 @@ def create_app() -> FastAPI:
             )
 
         async def event_stream():
-            async for event in stream_with_token_retry(make_stream):
+            from kicad_harness.agent import models as model_catalog
+
+            async for event in stream_with_token_retry(
+                make_stream, model_catalog.budget_for(host.model)
+            ):
                 yield event
 
         host.active += 1

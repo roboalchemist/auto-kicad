@@ -197,8 +197,8 @@ def test_next_budget_moves_in_the_right_direction():
     exhausted = UnexpectedModelBehavior(
         "Model token limit (16000) exceeded before any response was generated."
     )
-    assert next_budget(16000, exhausted) == 32000          # too small -> grow
-    assert next_budget(64000, exhausted) is None           # already at the ceiling
+    assert next_budget(16000, exhausted, max_budget=64000) == 32000    # too small -> grow
+    assert next_budget(64000, exhausted, max_budget=64000) is None     # already at the ceiling
 
     credit = RuntimeError("402: fewer max_tokens, you can only afford 25411 tokens")
     assert next_budget(32000, credit) == 16000             # too large -> shrink
@@ -228,3 +228,68 @@ def test_cli_evaluation_works_in_the_schematic_phase(services, new_project):
     assert "unconnected_pins" in drc
     assert "erc_counts" in drc
     assert isinstance(threads, list)
+
+
+# ---------------------------------------------------------------------------------------------
+# max_tokens follows the model, not a fixed number
+
+
+def test_budget_follows_the_model_limit(monkeypatch) -> None:
+    """An advertised model limit is used instead of a constant."""
+    from kicad_harness.agent import models as model_catalog
+
+    class Cfg:
+        bifrost_base_url = "https://gw.example/v1"
+        bifrost_api_key = "k"
+
+    monkeypatch.delenv("HARNESS_MAX_TOKENS", raising=False)
+    monkeypatch.setattr(
+        model_catalog,
+        "_MODELS_CACHE",
+        (__import__("time").monotonic(), Cfg.bifrost_base_url,
+         [{"id": "zai/glm-5.3", "max_output_tokens": 128000}]),
+    )
+    assert model_catalog.output_limit("bifrost:zai/glm-5.3", Cfg()) == 128000
+    assert model_catalog.budget_for("bifrost:zai/glm-5.3", Cfg()) == 128000
+
+
+def test_budget_falls_back_for_an_unlisted_alias(monkeypatch) -> None:
+    """An alias the gateway does not list has no advertised limit: use the fallback."""
+    from kicad_harness.agent import models as model_catalog
+
+    class Cfg:
+        bifrost_base_url = "https://gw.example/v1"
+        bifrost_api_key = "k"
+
+    monkeypatch.delenv("HARNESS_MAX_TOKENS", raising=False)
+    monkeypatch.setattr(
+        model_catalog, "_MODELS_CACHE",
+        (__import__("time").monotonic(), Cfg.bifrost_base_url, [{"id": "other/model"}]),
+    )
+    assert model_catalog.output_limit("bifrost:deepseek-flash-latest", Cfg()) is None
+    assert model_catalog.budget_for("bifrost:deepseek-flash-latest", Cfg()) == model_catalog.FALLBACK_MAX_TOKENS
+
+
+def test_explicit_override_wins(monkeypatch) -> None:
+    from kicad_harness.agent import models as model_catalog
+
+    monkeypatch.setenv("HARNESS_MAX_TOKENS", "12345")
+    assert model_catalog.output_limit("bifrost:anything") == 12345
+
+
+def test_limit_lookup_never_blocks_the_caller(monkeypatch) -> None:
+    """A cold cache must return immediately (fallback) instead of waiting on the gateway."""
+    import time
+
+    from kicad_harness.agent import models as model_catalog
+
+    class Cfg:
+        bifrost_base_url = "https://gw.example/v1"
+        bifrost_api_key = "k"
+
+    monkeypatch.delenv("HARNESS_MAX_TOKENS", raising=False)
+    monkeypatch.setattr(model_catalog, "_MODELS_CACHE", None)
+    monkeypatch.setattr(model_catalog, "_refresh_models_in_background", lambda *a, **k: None)
+    started = time.monotonic()
+    assert model_catalog.budget_for("bifrost:whatever", Cfg()) == model_catalog.FALLBACK_MAX_TOKENS
+    assert time.monotonic() - started < 0.5

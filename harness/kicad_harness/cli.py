@@ -231,7 +231,10 @@ async def _run(name, prompt, loop, model, supervised, thread_id, color) -> int:
             async def native():
                 from kicad_harness.server import clamp_budget, next_budget
 
-                budget = clamp_budget(int(os.environ.get("HARNESS_MAX_TOKENS", "20000")))
+                from kicad_harness.agent import models as model_catalog
+                from kicad_harness.agent.agent import current_model
+
+                budget = clamp_budget(model_catalog.budget_for(model or current_model()))
                 for _ in range(6):
                     started["ok"] = False
                     try:

@@ -11,9 +11,10 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="${ECAD_DEST:-/srv/ecad-agent/harness}"
 
 # Files that exist only on the deployment.
+# Only files that genuinely differ from the repo belong here. agent/models.py used to be
+# listed but had no unique content, which let it drift out of date instead of being deployed.
 KEEP=(
   "kicad_harness/config.py"
-  "kicad_harness/agent/models.py"
 )
 
 backup="$(mktemp -d)"

@@ -106,6 +106,128 @@ def bifrost_ids(config, *, timeout: float = 8.0) -> list[str]:
     return _store_ids(base, _fetch_ids(base, key, timeout))
 
 
+# Where a model's completion limit comes from, in order: an explicit HARNESS_MAX_TOKENS
+# override, then what the provider advertises, then a conservative fallback that the adaptive
+# retry in server.next_budget() corrects in either direction at runtime.
+FALLBACK_MAX_TOKENS = 64000
+
+_MODELS_CACHE: tuple[float, str, list[dict[str, Any]]] | None = None
+_MODELS_TTL = 300.0
+_MODELS_LOCK = threading.Lock()
+
+
+def _fetch_models(base: str, key: str | None, timeout: float = 20.0) -> list[dict[str, Any]]:
+    """The gateway's model entries, including the limits it advertises for each.
+
+    The gateway's /models is slow here (over 5 s), so this is only ever called from a
+    background thread or at startup — never on the path that builds an agent.
+    """
+    if not (base and key):
+        return []
+    request = urllib.request.Request(f"{base}/models", headers={"Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - configured host
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return []
+    return [m for m in (payload.get("data") or []) if isinstance(m, dict)]
+
+
+_REFRESHING_MODELS = False
+
+
+def _refresh_models_in_background(base: str, key: str | None) -> None:
+    """Fetch model metadata off the hot path; the next run then knows the real limits."""
+    global _REFRESHING_MODELS
+    with _MODELS_LOCK:
+        if _REFRESHING_MODELS:
+            return
+        _REFRESHING_MODELS = True
+
+    def run() -> None:
+        global _MODELS_CACHE, _REFRESHING_MODELS
+        try:
+            entries = _fetch_models(base, key)
+            if entries:
+                _MODELS_CACHE = (time.monotonic(), base, entries)
+        finally:
+            with _MODELS_LOCK:
+                _REFRESHING_MODELS = False
+
+    threading.Thread(target=run, name="bifrost-models", daemon=True).start()
+
+
+def _gateway_models(config: Any) -> list[dict[str, Any]]:
+    """Cached gateway model metadata, refreshed in the background so callers never block."""
+    base = (getattr(config, "bifrost_base_url", "") or "").rstrip("/")
+    if not base:
+        return []
+    cached = _MODELS_CACHE
+    if cached is not None and cached[1] == base and time.monotonic() - cached[0] < _MODELS_TTL:
+        return cached[2]
+    _refresh_models_in_background(base, getattr(config, "bifrost_api_key", None))
+    # Stale data beats no data; an empty cache means the first run falls back and adapts.
+    return cached[2] if cached is not None and cached[1] == base else []
+
+
+def warm_model_limits(config: Any = None) -> None:
+    """Start filling the model-metadata cache (call once at service or CLI startup)."""
+    cfg = config or _config()
+    _gateway_models(cfg)
+
+
+def output_limit(model: str, config: Any = None) -> int | None:
+    """The completion-token limit of ``model``, or ``None`` when nothing advertises one.
+
+    A model alias the gateway does not list (``deepseek-flash-latest``) has no advertised limit;
+    callers fall back to ``FALLBACK_MAX_TOKENS`` and let the adaptive retry settle it.
+    """
+    override = os.environ.get("HARNESS_MAX_TOKENS")
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            pass
+
+    if model.startswith(BIFROST_PREFIX):
+        wanted = model[len(BIFROST_PREFIX):]
+        cfg = config or _config()
+        for entry in _gateway_models(cfg):
+            names = {
+                str(entry.get("id") or ""),
+                str(entry.get("normalized_name") or ""),
+                str(entry.get("name") or ""),
+            }
+            if wanted in names or wanted.lower() in {n.lower() for n in names if n}:
+                limit = entry.get("max_output_tokens") or entry.get("max_completion_tokens")
+                if limit:
+                    return int(limit)
+        return None
+
+    # Providers pydantic-ai has a profile for (Anthropic, Google, ...).
+    try:
+        built = resolve(model)
+        profile = getattr(built, "profile", None)
+        for key in ("max_output_tokens", "max_tokens"):
+            value = profile.get(key) if hasattr(profile, "get") else None
+            if value:
+                return int(value)
+    except Exception:
+        pass
+    return None
+
+
+def budget_for(model: str, config: Any = None) -> int:
+    """The ``max_tokens`` to send: the model's own limit, else a conservative fallback."""
+    return output_limit(model, config) or FALLBACK_MAX_TOKENS
+
+
+def _config() -> Any:
+    from kicad_harness import config as config_mod
+
+    return config_mod.get()
+
+
 def _provider_configured(model: str, config: Any = None) -> bool:
     """Whether the provider behind ``model`` has credentials on this machine.
 
@@ -144,6 +266,9 @@ def catalog(config) -> list[dict[str, Any]]:
             if entry["id"] not in seen:
                 seen.add(entry["id"])
                 out.append(entry)
+    # Show the completion limit each model actually gets, so the picker reflects reality.
+    for entry in out:
+        entry["max_tokens"] = budget_for(entry["id"], config)
     return out
 
 

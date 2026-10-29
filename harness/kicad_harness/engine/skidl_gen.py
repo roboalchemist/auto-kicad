@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -159,13 +160,16 @@ def generate(
     # skidl's auto-router fails intermittently ("RoutingFailure") on netlists it routes fine on
     # the next try, so a long goal loop must not treat one failure as permanent.
     last_error: Exception | None = None
-    for attempt in range(5):
+    for attempt in range(8):
         try:
             return _run_once(payload, out, env, timeout)
         except EngineError as exc:
             last_error = exc
-            if "RoutingFailure" not in str(exc) or attempt == 4:
+            if "RoutingFailure" not in str(exc) or attempt == 7:
                 raise
+            # Its placement/routing pass is stochastic: a short pause then a fresh attempt
+            # usually succeeds, and a long goal loop must not surface that as a hard failure.
+            time.sleep(0.4 * (attempt + 1))
     assert last_error is not None
     raise last_error
 
