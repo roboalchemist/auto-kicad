@@ -1705,3 +1705,12 @@ div.tool-card:focus-within > *:not(.tool-card-header):not(summary) {
 }
 div.tool-card { padding: 1px 0; }
 div.tool-card > .tool-card-header { padding: 3px 8px; }
+
+/* ---------------------------------------------------------------- chat scrolling */
+/* Loading a long thread must land at the newest message, not animate through thousands of
+   pixels of history. Kill smooth scrolling inside the chat and contain the scroll. */
+.chat-holder,
+.chat-holder * {
+  scroll-behavior: auto !important;
+  overscroll-behavior: contain;
+}
