@@ -22,14 +22,31 @@ import type {
   VersionSummary,
 } from "./types.ts";
 
+/** A transient failure (backend restarting, proxied socket dropped) is worth retrying. */
+async function fetchWithRetry(path: string, init?: RequestInit, attempts = 3): Promise<Response> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const res = await fetch(path, init);
+      // 502/503/504 are what a restarting or briefly unresponsive backend produces.
+      if (res.ok || (res.status !== 502 && res.status !== 503 && res.status !== 504)) return res;
+      lastError = new Error(`${res.status} ${res.statusText}`);
+    } catch (err) {
+      lastError = err;
+    }
+    if (attempt < attempts - 1) await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await fetchWithRetry(path);
   if (!res.ok) throw new Error(`GET ${path}: ${res.status} ${await res.text().catch(() => "")}`.slice(0, 300));
   return res.json() as Promise<T>;
 }
 
 async function send<T>(path: string, method: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetchWithRetry(path, {
     method,
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),

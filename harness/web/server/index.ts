@@ -39,7 +39,38 @@ const runtime = new CopilotRuntime({
 });
 
 const app = express();
-app.use("/api", createProxyMiddleware({ target: `${BACKEND_URL}/api` }));
+// A pooled socket to the backend gets closed by uvicorn's keep-alive timeout between requests;
+// reusing it fails instantly (ECONNRESET) and http-proxy answers 504, which surfaced in the UI as
+// a spurious "504 Error occur" while the backend was perfectly healthy. Don't pool, retry a
+// transient connection failure once for reads, and report 503 with a reason instead of a bare 504.
+const apiProxy = createProxyMiddleware({
+  target: `${BACKEND_URL}/api`,
+  changeOrigin: false,
+  agent: false,
+  proxyTimeout: 120_000,
+  timeout: 120_000,
+  on: {
+    error: (err: NodeJS.ErrnoException, req: express.Request, res: express.Response | import("stream").Writable) => {
+      const retriable = err.code === "ECONNRESET" || err.code === "ECONNREFUSED" || err.code === "EPIPE";
+      const method = (req.method ?? "GET").toUpperCase();
+      console.error(`[proxy] ${method} ${req.url} -> ${err.code ?? err.name}: ${err.message}`);
+      // A read that lost its pooled socket is safe to retry once.
+      if (retriable && method === "GET" && !(req as express.Request & { _retried?: boolean })._retried) {
+        (req as express.Request & { _retried?: boolean })._retried = true;
+        apiProxy(req, res as express.Response, (e?: unknown) => {
+          if (e) console.error(`[proxy] retry failed for ${req.url}`);
+        });
+        return;
+      }
+      const out = res as express.Response;
+      if (!out.headersSent) {
+        out.writeHead(503, { "Content-Type": "text/plain; charset=utf-8", "Retry-After": "1" });
+      }
+      out.end?.("backend temporarily unavailable");
+    },
+  },
+});
+app.use("/api", apiProxy);
 app.use(createCopilotExpressHandler({ runtime, basePath: "/copilotkit", cors: false, activateChannels: false }));
 
 const server = app.listen(PORT, "127.0.0.1", () => {
