@@ -293,3 +293,12 @@ def test_limit_lookup_never_blocks_the_caller(monkeypatch) -> None:
     started = time.monotonic()
     assert model_catalog.budget_for("bifrost:whatever", Cfg()) == model_catalog.FALLBACK_MAX_TOKENS
     assert time.monotonic() - started < 0.5
+
+
+def test_unconfigured_provider_gives_a_readable_error(monkeypatch) -> None:
+    """Choosing a model whose provider has no key must say so, not raise an obscure one."""
+    from kicad_harness.agent import models as model_catalog
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+        model_catalog.resolve("anthropic:claude-sonnet-5-5")

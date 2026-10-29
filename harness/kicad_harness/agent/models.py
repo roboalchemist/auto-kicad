@@ -279,9 +279,26 @@ def _entry(model: str) -> dict[str, Any]:
     return {"id": model, "label": model.split(":", 1)[-1], "provider": provider}
 
 
+# The env var a provider needs before a model on it can run at all.
+_PROVIDER_KEY = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "google": "GEMINI_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+}
+
+
 def resolve(model: str):
     """Turn a ``bifrost:<id>`` selection into a pydantic-ai model; other routes stay strings."""
     if not model.startswith(BIFROST_PREFIX):
+        provider = model.split(":", 1)[0] if ":" in model else ""
+        needed = _PROVIDER_KEY.get(provider)
+        if needed and not (os.environ.get(needed) or os.environ.get("GOOGLE_API_KEY")):
+            raise ValueError(
+                f"model {model!r} needs {needed}, which is not set. "
+                "Pick a model whose provider is configured, or set the key."
+            )
         return model
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
