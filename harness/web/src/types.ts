@@ -66,6 +66,23 @@ export interface BomResponse {
   total_qty: number;
 }
 
+/** Token accounting for a project's current thread (see /api/designs/{d}/usage). */
+export interface UsageInfo {
+  model: string;
+  context_window: number | null;
+  max_output_tokens: number;
+  context_estimate: number | null;
+  percent: number | null;
+  last_run: {
+    run_id?: string | null;
+    status?: string;
+    input_tokens?: number | null;
+    output_tokens?: number | null;
+    total_tokens?: number | null;
+    requests?: number | null;
+  };
+}
+
 /** The project list returns a short goal summary string. */
 export interface DesignListItem extends DesignInfo {
   goal_summary?: string | null;

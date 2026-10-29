@@ -70,6 +70,16 @@ def _as_dict(obj: Any) -> dict:
 _REF_RE = re.compile(r"^(\D*?)(\d+)(.*)$")
 
 
+def estimate_tokens(payload: Any) -> int | None:
+    """Rough token count for a JSON-serialisable payload (~4 characters per token)."""
+    try:
+        if isinstance(payload, list):
+            payload = [m.model_dump(mode="json") if hasattr(m, "model_dump") else m for m in payload]
+        return max(1, len(json.dumps(payload, default=str)) // 4)
+    except Exception:
+        return None
+
+
 def ref_sort_key(ref: str) -> tuple:
     """Sort ``R10`` after ``R9`` (plain string order puts it before)."""
     match = _REF_RE.match(ref.strip())
@@ -425,7 +435,23 @@ def create_app() -> FastAPI:
             svc.store.runs.start(design, thread_id=run_input.thread_id, run_id=run_id, model=host.model,
                                  prompt=_last_user_text(run_input), source="ui")
 
+        # Token accounting for the context counter: the prompt size we were sent (the client
+        # replays the thread), plus the real usage the model reported when the run ends.
+        tokens: dict[str, Any] = {}
+        tokens["context_estimate"] = estimate_tokens(getattr(run_input, "messages", None) or [])
+
         async def final_state(_result):
+            try:
+                usage = getattr(_result, "usage", None)
+                if usage is not None:
+                    tokens["usage"] = {
+                        "input_tokens": getattr(usage, "input_tokens", None),
+                        "output_tokens": getattr(usage, "output_tokens", None),
+                        "total_tokens": getattr(usage, "total_tokens", None),
+                        "requests": getattr(usage, "requests", None),
+                    }
+            except Exception:
+                pass
             yield _snapshot(deps.state)
 
         def make_stream(budget: int):
@@ -468,7 +494,7 @@ def create_app() -> FastAPI:
             finally:
                 host.active = max(0, host.active - 1)
                 if design:
-                    svc.store.runs.finish(run_id, status)
+                    svc.store.runs.finish(run_id, status, usage=tokens or None)
 
         return adapter.streaming_response(logged())
 
@@ -697,6 +723,42 @@ def create_app() -> FastAPI:
         chosen = min(max(sheet, 0), len(plots) - 1)
         return Response(content=plots[chosen].read_bytes(), media_type="image/svg+xml",
                         headers={"Cache-Control": "max-age=3600"})
+
+    # ------------------------------------------------------------------ context usage
+
+    @app.get("/api/designs/{design}/usage")
+    async def usage(request: Request, design: str):
+        """How much of the model's context the current thread is using.
+
+        ``context_estimate`` is the prompt size the last run was sent (the client replays the
+        thread); ``last_run`` carries the real token usage the model reported when it finished.
+        """
+        from kicad_harness.agent import models as model_catalog
+
+        svc = _svc(request)
+        _workspace(svc, design)
+        model = request.app.state.agent_host.model
+        runs = svc.store.runs.list(design)
+        last = runs[0] if runs else {}
+        stored = last.get("usage") or {}
+        window = model_catalog.context_window(model, svc.config)
+        limit = model_catalog.budget_for(model, svc.config)
+        growth = svc.store.runs.event_bytes(last.get("run_id")) if last.get("run_id") else 0
+        used = stored.get("context_estimate")
+        grown = int((growth or 0) / 4)
+        used = (used + grown) if used else (grown or None)
+        return {
+            "model": model,
+            "context_window": window,
+            "max_output_tokens": limit,
+            "context_estimate": used,
+            "percent": round(100 * used / window, 1) if used and window else None,
+            "last_run": {
+                "run_id": last.get("run_id"),
+                "status": last.get("status"),
+                **(stored.get("usage") or {}),
+            },
+        }
 
     # ------------------------------------------------------------------ bill of materials
 

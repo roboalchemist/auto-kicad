@@ -133,6 +133,25 @@ class Runs:
             )
             return self._get(conn, run_id)
 
+    def event_bytes(self, run_id: str) -> int:
+        """Characters of message content a run produced (text, reasoning, tool args, results).
+
+        Only the content fields count — event metadata would inflate the estimate. Used as a
+        proxy for how much the conversation grew during the run.
+        """
+        row = self._store.query_one(
+            """
+            SELECT COALESCE(SUM(LENGTH(COALESCE(
+                json_extract(data, '$.delta'),
+                json_extract(data, '$.content'),
+                ''
+            ))), 0) AS n
+            FROM run_events WHERE run_id = ?
+            """,
+            (run_id,),
+        )
+        return int(row["n"]) if row else 0
+
     def list(self, design: str) -> list[dict[str, Any]]:
         """Runs of ``design``, newest first."""
         rows = self._store.query(

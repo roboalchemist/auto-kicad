@@ -217,6 +217,30 @@ def output_limit(model: str, config: Any = None) -> int | None:
     return None
 
 
+def context_window(model: str, config: Any = None) -> int | None:
+    """The model's context window in tokens, when the provider advertises it."""
+    if model.startswith(BIFROST_PREFIX):
+        wanted = model[len(BIFROST_PREFIX):]
+        cfg = config or _config()
+        for entry in _gateway_models(cfg):
+            names = {str(entry.get("id") or ""), str(entry.get("normalized_name") or ""), str(entry.get("name") or "")}
+            if wanted in names or wanted.lower() in {n.lower() for n in names if n}:
+                value = entry.get("context_length") or entry.get("max_input_tokens")
+                if value:
+                    return int(value)
+        return None
+    try:
+        built = resolve(model)
+        profile = getattr(built, "profile", None)
+        for key in ("max_input_tokens", "context_window"):
+            value = profile.get(key) if hasattr(profile, "get") else None
+            if value:
+                return int(value)
+    except Exception:
+        pass
+    return None
+
+
 def budget_for(model: str, config: Any = None) -> int:
     """The ``max_tokens`` to send: the model's own limit, else a conservative fallback."""
     return output_limit(model, config) or FALLBACK_MAX_TOKENS

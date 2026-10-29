@@ -7,6 +7,7 @@ import { AGENT_ID } from "./agent.ts";
 import { api } from "./api.ts";
 import { BoardViewer } from "./BoardViewer.tsx";
 import { BomTable } from "./BomTable.tsx";
+import { toolCallRenderers } from "./ToolCalls.tsx";
 import { SchematicViewer } from "./SchematicViewer.tsx";
 import { Header } from "./Header.tsx";
 import { asDesignState, useHarnessTools } from "./tools.tsx";
@@ -54,6 +55,7 @@ export function App() {
       agentId={AGENT_ID}
       enableInspector={import.meta.env.VITE_COPILOTKIT_INSPECTOR === "1"}
       showIntelligenceIndicator={false}
+      renderToolCalls={toolCallRenderers}
       onError={({ error, code }) => {
         console.error(`[copilotkit] ${code}`, error);
         setErrors((prev) => [...prev.slice(-4), `${code}: ${error.message}`]);
@@ -251,7 +253,15 @@ function Harness({ threadId, errors }: { threadId: string; errors: string[] }) {
   );
 
   const chat = useMemo(
-    () => <CopilotChat agentId={AGENT_ID} threadId={threadId} labels={{ chatInputPlaceholder: "Ask the KiCad agent…" }} />,
+    () => (
+      <CopilotChat
+        agentId={AGENT_ID}
+        threadId={threadId}
+        labels={{ chatInputPlaceholder: "Ask the KiCad agent…" }}
+        // Open at the newest message: a long thread is thousands of lines tall.
+        autoScroll="pin-to-bottom"
+      />
+    ),
     [threadId],
   );
 

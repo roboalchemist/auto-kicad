@@ -17,6 +17,7 @@ import type {
   SchematicInfo,
   SteerMessage,
   Thread,
+  UsageInfo,
   VersionInfo,
   VersionSummary,
 } from "./types.ts";
@@ -54,6 +55,7 @@ export const api = {
     ),
   schematic: (d: string) => get<SchematicInfo>(`/api/designs/${d}/schematic`),
   bom: (d: string) => get<BomResponse>(`/api/designs/${d}/bom`),
+  usage: (d: string) => get<UsageInfo>(`/api/designs/${d}/usage`),
   schematicSvgUrl: (d: string, rev = "working", sheet = 0, version?: string | null) =>
     `/api/designs/${d}/schematic.svg?rev=${encodeURIComponent(rev)}&sheet=${sheet}` +
     (version ? `&v=${encodeURIComponent(version)}` : ""),

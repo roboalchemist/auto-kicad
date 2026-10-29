@@ -297,6 +297,41 @@ function parseRenderResult(result: string | undefined): { meta?: { url: string; 
   }
 }
 
+/** One-line summary + collapsible detail, collapsed by default.
+ *
+ * A goal loop makes hundreds of tool calls; rendering every argument and result expanded
+ * buries the conversation. The header always shows what ran and whether it finished, and the
+ * detail is one click away.
+ */
+function Card({
+  name,
+  status,
+  children,
+  testId,
+  toolName,
+  extra,
+  className = "",
+}: {
+  name: string;
+  status: ToolStatus;
+  children?: React.ReactNode;
+  testId?: string;
+  toolName?: string;
+  extra?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <details className={`tool-card ${className}`} data-testid={testId} data-tool={toolName ?? name} data-status={status}>
+      <summary className="tool-card-header">
+        <span className="tool-name">{name}</span>
+        <span className={`tool-status tool-status-${status}`}>{statusLabel(status)}</span>
+        {extra}
+      </summary>
+      {children ? <div className="tool-card-body">{children}</div> : null}
+    </details>
+  );
+}
+
 function RenderViewCard({ status, result, params }: { status: ToolStatus; result?: string; params?: unknown }) {
   const { meta, image } = parseRenderResult(result);
   const target = (params as { target?: string } | undefined)?.target;
@@ -339,12 +374,17 @@ interface CheckResult {
 function CheckCard({ status, result }: { status: ToolStatus; result?: string }) {
   const r = parseResult<CheckResult>(result);
   return (
-    <div className="tool-card check-card" data-testid="check-card" data-status={status}>
-      <div className="tool-card-header">
-        <span className="tool-name">check</span>
-        <span className={`tool-status tool-status-${status}`}>{statusLabel(status)}</span>
-        {r?.goal_met !== undefined && <span className={`badge ${r.goal_met ? "badge-ok" : "badge-warn"}`}>{r.goal_met ? "goal met" : "goal not met"}</span>}
-      </div>
+    <Card
+      name="check"
+      status={status}
+      testId="check-card"
+      className="check-card"
+      extra={
+        r?.goal_met !== undefined ? (
+          <span className={`badge ${r.goal_met ? "badge-ok" : "badge-warn"}`}>{r.goal_met ? "goal met" : "goal not met"}</span>
+        ) : undefined
+      }
+    >
       {r && (
         <>
           <div className="drc-counts">
@@ -378,7 +418,7 @@ function CheckCard({ status, result }: { status: ToolStatus; result?: string }) 
           )}
         </>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -445,29 +485,35 @@ function EditCard({ name, parameters, status, result }: { name: string; paramete
   const short = version?.short ?? (typeof r?.version === "string" ? r.version : undefined);
   const subject = version?.subject ?? summarizeArgs(parameters);
   return (
-    <div className={`tool-card edit-card ${r?.ok === false ? "edit-error" : ""}`} data-testid="edit-card" data-tool={name} data-status={status}>
-      <div className="tool-card-header">
-        <span className="tool-name">{name}</span>
-        <span className="tool-args">{subject}</span>
-        <span className={`tool-status tool-status-${status}`}>{statusLabel(status)}</span>
-        {short && (
-          <a
-            className="version-link"
-            href="#"
-            data-testid="edit-version-link"
-            data-sha={version?.sha}
-            title="View this version"
-            onClick={(e) => {
-              e.preventDefault();
-              if (version?.sha) void setRev(version.sha);
-            }}
-          >
-            {short}
-          </a>
-        )}
-      </div>
+    <Card
+      name={name}
+      status={status}
+      testId="edit-card"
+      toolName={name}
+      className={`edit-card ${r?.ok === false ? "edit-error" : ""}`}
+      extra={
+        <>
+          <span className="tool-args">{subject}</span>
+          {short && (
+            <a
+              className="version-link"
+              href="#"
+              data-testid="edit-version-link"
+              data-sha={version?.sha}
+              title="View this version"
+              onClick={(e) => {
+                e.preventDefault();
+                if (version?.sha) void setRev(version.sha);
+              }}
+            >
+              {short}
+            </a>
+          )}
+        </>
+      }
+    >
       {r?.error && <div className="tool-caption error-text">{r.error}</div>}
-    </div>
+    </Card>
   );
 }
 
@@ -478,20 +524,29 @@ function summarizeArgs(params: unknown): string {
 }
 
 function ToolCard({ name, parameters, status, result }: { name: string; parameters: unknown; status: ToolStatus; result?: string }) {
+  const args = JSON.stringify(parameters ?? {}, null, 2);
   return (
-    <div className="tool-card" data-testid="tool-card" data-tool={name} data-status={status}>
-      <div className="tool-card-header">
-        <span className="tool-name">{name}</span>
-        <span className={`tool-status tool-status-${status}`}>{statusLabel(status)}</span>
-      </div>
-      <pre className="tool-json">{JSON.stringify(parameters ?? {}, null, 2)}</pre>
+    <Card name={name} status={status} testId="tool-card" toolName={name} extra={<ArgsPeek value={parameters} />}>
+      {args !== "{}" && <pre className="tool-json">{args}</pre>}
       {result !== undefined && (
         <pre className="tool-json tool-result" data-testid="tool-card-result">
           {result.length > 600 ? `${result.slice(0, 600)}…` : result}
         </pre>
       )}
-    </div>
+    </Card>
   );
+}
+
+/** A short argument summary shown in the collapsed header. */
+function ArgsPeek({ value, limit = 60 }: { value: unknown; limit?: number }) {
+  let text = "";
+  try {
+    text = typeof value === "string" ? value : JSON.stringify(value ?? {});
+  } catch {
+    return null;
+  }
+  if (!text || text === "{}" || text === "null") return null;
+  return <span className="tool-args-preview">{text.length > limit ? `${text.slice(0, limit)}…` : text}</span>;
 }
 
 // --------------------------------------------------------------------------- approvals
