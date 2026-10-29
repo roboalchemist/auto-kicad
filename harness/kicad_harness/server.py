@@ -67,6 +67,58 @@ def _as_dict(obj: Any) -> dict:
     return dataclasses.asdict(obj)
 
 
+_REF_RE = re.compile(r"^(\D*?)(\d+)(.*)$")
+
+
+def ref_sort_key(ref: str) -> tuple:
+    """Sort ``R10`` after ``R9`` (plain string order puts it before)."""
+    match = _REF_RE.match(ref.strip())
+    if not match:
+        return (ref, 0, "")
+    prefix, number, suffix = match.groups()
+    return (prefix, int(number), suffix)
+
+
+def group_bom(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Group identical parts into BOM lines, as a real BOM does.
+
+    Rows with the same value, footprint and LCSC part collapse into one line carrying every
+    reference. Returns ``(lines, total_qty)`` with lines ordered by reference.
+    """
+    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            str(row.get("value") or "").strip(),
+            str(row.get("footprint") or "").strip(),
+            str(row.get("lcsc") or "").strip().upper(),
+        )
+        line = groups.get(key)
+        if line is None:
+            line = groups[key] = {
+                "value": key[0],
+                "footprint": key[1],
+                "lcsc": key[2],
+                "description": row.get("description") or "",
+                "mpn": row.get("mpn") or "",
+                "tier": row.get("tier"),
+                "stock": row.get("stock"),
+                "unit_price": row.get("unit_price"),
+                "refs": [],
+            }
+        line["refs"].append(str(row.get("ref") or ""))
+        # Keep supplier facts if a later row for the same part carried them.
+        for field in ("mpn", "tier", "stock", "unit_price"):
+            if line.get(field) in (None, "") and row.get(field) not in (None, ""):
+                line[field] = row[field]
+
+    lines = list(groups.values())
+    for line in lines:
+        line["refs"] = sorted((r for r in line["refs"] if r), key=ref_sort_key)
+        line["qty"] = len(line["refs"])
+    lines.sort(key=lambda ln: ref_sort_key(ln["refs"][0]) if ln["refs"] else ("", 0, ""))
+    return lines, sum(line["qty"] for line in lines)
+
+
 class SseFanout:
     """Share live-state probes between the SSE streams of one design.
 
@@ -558,6 +610,8 @@ def create_app() -> FastAPI:
                 "name": design, "branch": ws.branch(), "head": ws.head(), "dirty": ws.dirty(),
                 "goal": ws.goal(), "phase": "schematic", "brief": ws.brief(),
                 "board_hash": None,
+                "has_board": ws.board_path.is_file(),
+                "has_schematic": ws.schematic_path.is_file(),
                 "schematic_hash": await asyncio.to_thread(
                     lambda: __import__("hashlib").sha256(ws.schematic_path.read_bytes()).hexdigest()[:16]
                 ),
@@ -571,6 +625,8 @@ def create_app() -> FastAPI:
         return {
             "name": design, "branch": ws.branch(), "head": ws.head(), "dirty": ws.dirty(), "goal": ws.goal(),
             "phase": ws.phase(), "brief": ws.brief(),
+            "has_board": ws.board_path.is_file(),
+            "has_schematic": ws.schematic_path.is_file(),
             "board_hash": board_hash,
             "summary": {"drc": drc.get("counts", {}), "size": [round(w, 3), round(h, 3)],
                         "components": len(index.get("footprints", []))},
@@ -631,6 +687,89 @@ def create_app() -> FastAPI:
         chosen = min(max(sheet, 0), len(plots) - 1)
         return Response(content=plots[chosen].read_bytes(), media_type="image/svg+xml",
                         headers={"Cache-Control": "max-age=3600"})
+
+    # ------------------------------------------------------------------ bill of materials
+
+    @app.get("/api/designs/{design}/bom")
+    async def bom(request: Request, design: str, enrich: bool = True):
+        """The project's bill of materials.
+
+        Taken from the schematic when there is one (that is where refs, values and footprints
+        are authored, so it works before layout exists), otherwise from the board's footprints —
+        projects imported from a ``.kicad_pcb`` have no schematic.
+
+        ``enrich`` adds JLCPCB stock/price for lines that carry an LCSC part number.
+        """
+        from kicad_harness.engine import parts as parts_mod
+        from kicad_harness.engine.schematic import Schematic
+
+        svc = _svc(request)
+        ws = _workspace(svc, design)
+        rows: list[dict[str, Any]] = []
+        source = "none"
+
+        if ws.schematic_path.is_file():
+            try:
+                doc = await asyncio.to_thread(Schematic.load, ws.schematic_path)
+            except Exception as exc:  # a half-written sheet should not 500 the BOM
+                raise HTTPException(422, f"the schematic could not be read: {exc}") from exc
+            for placement in doc.placements():
+                if placement.reference.startswith("#"):  # power flags are not parts
+                    continue
+                props = placement.properties or {}
+                rows.append(
+                    {
+                        "ref": placement.reference,
+                        "value": placement.value,
+                        "footprint": placement.footprint,
+                        "lcsc": props.get("LCSC") or "",
+                        "description": props.get("Description") or "",
+                    }
+                )
+            if rows:
+                source = "schematic"
+
+        if not rows and ws.board_path.is_file():
+            board_hash = await _rev_hash(svc, ws, "working")
+            index = await asyncio.to_thread(svc.artifacts.index, board_hash)
+            for fp in index.get("footprints", []):
+                rows.append(
+                    {
+                        "ref": fp.get("ref", ""),
+                        "value": fp.get("value", ""),
+                        "footprint": fp.get("footprint", ""),
+                        "lcsc": "",
+                        "description": "",
+                    }
+                )
+            if rows:
+                source = "board"
+
+        if enrich:
+            for row in rows:
+                lcsc = row.get("lcsc")
+                if not lcsc:
+                    continue
+                try:
+                    hit = await asyncio.to_thread(parts_mod.get_jlc, lcsc)
+                except Exception:  # supplier data is a bonus, never a reason to fail
+                    hit = None
+                if hit:
+                    row.update(
+                        mpn=hit["mpn"],
+                        tier=hit["tier"],
+                        stock=hit["stock"],
+                        unit_price=hit["unit_price"],
+                    )
+
+        lines, total_qty = group_bom(rows)
+        return {
+            "phase": ws.phase(),
+            "source": source,
+            "lines": lines,
+            "line_count": len(lines),
+            "total_qty": total_qty,
+        }
 
     # ------------------------------------------------------------------ versions
 

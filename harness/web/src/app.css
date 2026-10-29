@@ -1536,3 +1536,66 @@ button.stop-btn {
   line-height: 1.45;
 }
 .new-project-hint { font-size: 12px; line-height: 1.4; }
+
+/* ---------------------------------------------------------------- project sections (BOM / schematic / board) */
+.board-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.section-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  flex: 0 0 auto;
+}
+.section-tab {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-soft);
+  border-radius: 6px 6px 0 0;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.section-tab:hover { color: var(--text); background: var(--surface-3); }
+.section-tab.active {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  border-bottom-color: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: -7px;
+  padding-bottom: 12px;
+}
+.section-hint { margin-left: auto; font-size: 12px; }
+.section-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.section-empty { padding: 28px; text-align: center; font-size: 13px; }
+
+/* BOM */
+.bom-view { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 8px; gap: 8px; }
+.bom-bar { display: flex; align-items: center; gap: 10px; font-size: 12px; flex: 0 0 auto; }
+.bom-empty { padding: 28px; text-align: center; font-size: 13px; }
+.bom-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.bom-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.bom-table th, .bom-table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.bom-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-2);
+  font-weight: 600;
+  color: var(--text-soft);
+  z-index: 1;
+}
+.bom-table tbody tr:hover { background: var(--surface-2); }
+.bom-refs { font-weight: 600; }
+.bom-lcsc { font-family: var(--mono, ui-monospace, monospace); }

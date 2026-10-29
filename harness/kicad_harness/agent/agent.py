@@ -1321,7 +1321,16 @@ def build_agent(model: str | None = None) -> Agent[HarnessDeps, str | DeferredTo
 
             doc = await asyncio.to_thread(Schematic.load, target)
             stubs = await asyncio.to_thread(doc.draw_pin_stubs)
-            if stubs.get("stubbed"):
+
+            # Record supplier parts on the symbols so the project's BOM carries them.
+            recorded = 0
+            for part in validated_parts:
+                if part.lcsc and doc.set_symbol_property(part.ref, "LCSC", part.lcsc):
+                    recorded += 1
+                if part.description and doc.set_symbol_property(part.ref, "Description", part.description):
+                    pass
+
+            if stubs.get("stubbed") or recorded:
                 await asyncio.to_thread(doc.save)
         except Exception:
             stubs = {}

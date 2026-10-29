@@ -42,6 +42,8 @@ class PartSpec:
     symbol: str
     value: str = ""
     footprint: str = ""
+    lcsc: str = ""          # supplier part number, recorded on the symbol for the BOM
+    description: str = ""
 
 
 @dataclass
@@ -101,6 +103,8 @@ def validate(spec: dict[str, Any]) -> tuple[list[PartSpec], list[NetSpec]]:
                 symbol=symbol,
                 value=str(raw.get("value", "") or ""),
                 footprint=str(raw.get("footprint", "") or ""),
+                lcsc=str(raw.get("lcsc", "") or ""),
+                description=str(raw.get("description", "") or ""),
             )
         )
 

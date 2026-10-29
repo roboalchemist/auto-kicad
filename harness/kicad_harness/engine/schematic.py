@@ -882,6 +882,35 @@ class Schematic:
 
         return {"stubbed": stubbed, "skipped_occupied": skipped}
 
+    def set_symbol_property(self, reference: str, name: str, value: str) -> bool:
+        """Set (or add) a property on a placed symbol, e.g. the LCSC part number for the BOM."""
+        for sym in find_all(self.tree, "symbol"):
+            lib_node = find_one(sym, "lib_id")
+            if lib_node is None:
+                continue  # a library definition, not a placement
+            props = {
+                _clean(p[1]) if len(p) > 1 else "": p
+                for p in find_all(sym, "property")
+            }
+            ref_prop = props.get("Reference")
+            if ref_prop is None or len(ref_prop) < 3 or _clean(ref_prop[2]) != reference:
+                continue
+            existing = props.get(name)
+            if existing is not None:
+                if len(existing) > 2:
+                    existing[2] = Q(str(value))
+                return True
+            at = find_one(sym, "at") or ["at", "0", "0", "0"]
+            sym.append(
+                [
+                    "property", Q(name), Q(str(value)),
+                    ["at", at[1], at[2], "0"],
+                    ["effects", ["font", ["size", "1.27", "1.27"]], "hide"],
+                ]
+            )
+            return True
+        return False
+
     def add_junction(self, x: float, y: float) -> list:
         """Mark a T-connection where three or more wires meet."""
         node = ["junction", ["at", num(snap(x)), num(snap(y))], ["diameter", "0"], ["color", "0", "0", "0", "0"], ["uuid", Q(new_uuid())]]

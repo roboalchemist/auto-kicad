@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AGENT_ID } from "./agent.ts";
 import { api } from "./api.ts";
 import { BoardViewer } from "./BoardViewer.tsx";
+import { BomTable } from "./BomTable.tsx";
 import { SchematicViewer } from "./SchematicViewer.tsx";
 import { Header } from "./Header.tsx";
 import { asDesignState, useHarnessTools } from "./tools.tsx";
@@ -65,6 +66,14 @@ export function App() {
 
 type TabId = "agent" | "review" | "versions" | "activity" | "goal";
 
+/** The three sections of a project, switchable from the main panel's tab bar. */
+type Section = "bom" | "schematic" | "board";
+
+function sectionFromStorage(): Section | null {
+  const value = localStorage.getItem("harness.section");
+  return value === "bom" || value === "schematic" || value === "board" ? value : null;
+}
+
 function Harness({ threadId, errors }: { threadId: string; errors: string[] }) {
   const h = useHarness();
   const { agent, isReady } = useAgent({
@@ -73,12 +82,17 @@ function Harness({ threadId, errors }: { threadId: string; errors: string[] }) {
   });
   const { copilotkit } = useCopilotKit();
   const [tab, setTab] = useState<TabId>("agent");
+  // Default follows the project's phase until the user picks a section explicitly.
+  const [section, setSection] = useState<Section | null>(() => sectionFromStorage());
   useHarnessTools();
 
   // The agent owns the phase; the viewer follows it (schematic sheet until a board exists).
   const phase = ((agent.state as { phase?: string } | undefined)?.phase ?? h.design?.phase ?? "board") as
     | "schematic"
     | "board";
+
+  // An explicit choice wins; otherwise show the section the project is actually in.
+  const active: Section = section ?? (phase === "schematic" ? "schematic" : "board");
 
   // ---- AG-UI state: register sinks so store actions write design/selection/viewing/loop/supervised
   // into the agent state that accompanies the next run.
@@ -246,15 +260,54 @@ function Harness({ threadId, errors }: { threadId: string; errors: string[] }) {
       <Header onToggleLoop={toggleLoop} onToggleSupervised={toggleSupervised} />
       <div className="harness-body">
         <section className="board-panel">
-          {phase === "schematic" && h.designName ? (
-            <SchematicViewer
-              design={h.designName}
-              rev={h.rev}
-              version={h.design?.schematic_hash ?? null}
-            />
-          ) : (
-            <BoardViewer onOpenThread={() => setTab("review")} />
-          )}
+          <div className="section-tabs" data-testid="section-tabs">
+            {(
+              [
+                ["bom", "BOM"],
+                ["schematic", "Schematic"],
+                ["board", "Board layout"],
+              ] as [Section, string][]
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                className={`section-tab ${active === id ? "active" : ""}`}
+                data-testid={`section-tab-${id}`}
+                onClick={() => {
+                  setSection(id);
+                  localStorage.setItem("harness.section", id);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+            <span className="section-hint muted">{h.designName ?? ""}</span>
+          </div>
+          <div className="section-body">
+            {!h.designName ? (
+              <div className="section-empty muted">Pick a project to see its BOM, schematic and board.</div>
+            ) : active === "bom" ? (
+              <BomTable design={h.designName} />
+            ) : active === "schematic" ? (
+              h.design?.has_schematic === false ? (
+                <div className="section-empty muted" data-testid="no-schematic">
+                  This project was imported from a board file, so it has no schematic.
+                </div>
+              ) : (
+                <SchematicViewer
+                  design={h.designName}
+                  rev={h.rev}
+                  version={h.design?.schematic_hash ?? null}
+                />
+              )
+            ) : h.design?.has_board === false ? (
+              <div className="section-empty muted" data-testid="no-board">
+                No board yet — the schematic phase creates it.{" "}
+                {phase === "schematic" ? "Use the Schematic tab, then lay out the board." : ""}
+              </div>
+            ) : (
+              <BoardViewer onOpenThread={() => setTab("review")} />
+            )}
+          </div>
         </section>
         <section className="side-panel">
           <div className="side-tabs">

@@ -43,6 +43,29 @@ export interface SchematicInfo {
   erc: { counts: { errors?: number | null; warnings?: number | null }; violations?: unknown[]; error?: string };
 }
 
+
+/** One line of a project's bill of materials: a distinct part and every reference using it. */
+export interface BomLine {
+  refs: string[];
+  qty: number;
+  value: string;
+  footprint: string;
+  lcsc: string;
+  description?: string;
+  mpn?: string;
+  tier?: "basic" | "extended" | null;
+  stock?: number | null;
+  unit_price?: number | null;
+}
+
+export interface BomResponse {
+  phase: Phase;
+  source: "schematic" | "board" | "none";
+  lines: BomLine[];
+  line_count: number;
+  total_qty: number;
+}
+
 /** The project list returns a short goal summary string. */
 export interface DesignListItem extends DesignInfo {
   goal_summary?: string | null;
@@ -75,6 +98,8 @@ export interface VersionSummary {
 
 export interface DesignDetail extends DesignInfo {
   dirty: boolean;
+  has_board?: boolean;
+  has_schematic?: boolean;
   goal: Goal;
   board_hash: string | null;
   phase?: Phase;
