@@ -389,6 +389,21 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(asyncio.to_thread(model_catalog.bifrost_ids, svc.config))
     # Also learn each model's advertised output limit, so max_tokens follows the model.
     asyncio.create_task(asyncio.to_thread(model_catalog.warm_model_limits, svc.config))
+    # Stop replaying token-limit errors from threads that have since moved on.
+    try:
+        from kicad_harness.store.threads import prune_reasoning, prune_stale_token_errors
+
+        async def _housekeeping() -> None:
+            await asyncio.to_thread(prune_reasoning, svc.config.copilot_db)
+            await asyncio.to_thread(
+                prune_stale_token_errors,
+                svc.config.copilot_db,
+                model_catalog.budget_for(request.app.state.agent_host.model, svc.config),
+            )
+
+        asyncio.create_task(_housekeeping())
+    except Exception:  # housekeeping must never block startup
+        pass
     if stale:
         import logging
 
@@ -468,6 +483,13 @@ def create_app() -> FastAPI:
             async for event in stream_with_token_retry(
                 make_stream, model_catalog.budget_for(host.model)
             ):
+                # Reasoning arrives as one event per token delta — tens of thousands per run —
+                # and the web runtime stores every event it receives so it can replay a thread.
+                # That made reopening a long thread a multi-megabyte replay of "thoughts".
+                # The reasoning is not needed to reconstruct the conversation, so it is not
+                # forwarded at all.
+                if str(getattr(event, "type", "")).startswith("REASONING"):
+                    continue
                 yield event
 
         host.active += 1

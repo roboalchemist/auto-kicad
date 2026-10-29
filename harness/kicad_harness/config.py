@@ -89,6 +89,12 @@ class Config:
         return self.home / "renders"
 
     @property
+    def copilot_db(self) -> Path:
+        """The web runtime's thread store (its replay history lives here)."""
+        env = os.environ.get("COPILOT_DB")
+        return Path(env).expanduser() if env else REPO_DIR / "harness" / "web" / ".data" / "copilot-threads.db"
+
+    @property
     def db_path(self) -> Path:
         return self.home / "harness.db"
 
